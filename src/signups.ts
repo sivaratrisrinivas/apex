@@ -9,7 +9,17 @@ export type UnqualifiedSignupReason =
   | "educational-domain"
   | "disposable-domain"
   | "ambiguous-domain";
-export type InitialEnrichmentStatus = "pending";
+export type EnrichmentStatus =
+  | "pending"
+  | "researching"
+  | "completed"
+  | "partial"
+  | "unqualified"
+  | "failed";
+
+export type EnrichmentRunCompletion =
+  | { status: "completed" | "partial" }
+  | { status: "failed"; failureReason: string };
 
 export interface DemoSignupPayload {
   email: unknown;
@@ -35,12 +45,24 @@ export interface Company {
   createdAt: string;
 }
 
+export interface EnrichmentRun {
+  id: string;
+  developerSignupId: string;
+  companyId: string;
+  normalizedCompanyDomain: string;
+  status: EnrichmentStatus;
+  requestedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  failureReason?: string;
+}
+
 export interface LeadQueueRecord {
   id: string;
   companyId: string;
   companyName: string;
   normalizedCompanyDomain: string;
-  enrichmentStatus: InitialEnrichmentStatus;
+  enrichmentStatus: EnrichmentStatus;
   leadScore: null;
   evidenceConfidence: "Pending";
   signupCount: number;
@@ -53,7 +75,7 @@ export interface SignupValidationError {
 }
 
 export type SignupIntakeResult =
-  | { ok: true; developerSignup: DeveloperSignup }
+  | { ok: true; developerSignup: DeveloperSignup; enrichmentRun?: EnrichmentRun }
   | { ok: false; status: 400; body: SignupValidationError };
 
 interface PrototypeStoreOptions {
@@ -81,9 +103,22 @@ interface LeadRow {
   id: string;
   company_id: string;
   normalized_company_domain: string;
-  enrichment_status: InitialEnrichmentStatus;
+  enrichment_status: EnrichmentStatus;
   signup_count: number;
   latest_signup_at: string;
+}
+
+interface EnrichmentRunRow {
+  sequence: number;
+  id: string;
+  developer_signup_id: string;
+  company_id: string;
+  normalized_company_domain: string;
+  status: EnrichmentStatus;
+  requested_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  failure_reason: string | null;
 }
 
 export class PrototypeStore {
@@ -124,17 +159,21 @@ export class PrototypeStore {
 
     developerSignup.id = this.insertDeveloperSignup(developerSignup);
 
+    let enrichmentRun: EnrichmentRun | undefined;
+
     if (developerSignup.qualification === "qualified") {
       const company = this.ensureCompany(
         developerSignup.normalizedCompanyDomain,
         developerSignup.signedUpAt,
       );
-      this.ensureLeadQueueRecord(company, developerSignup.signedUpAt);
+      enrichmentRun = this.createEnrichmentRun(developerSignup, company);
+      this.ensureLeadQueueRecord(company, developerSignup.signedUpAt, enrichmentRun.status);
     }
 
     return {
       ok: true,
       developerSignup,
+      enrichmentRun,
     };
   }
 
@@ -206,6 +245,74 @@ export class PrototypeStore {
     }));
   }
 
+  listEnrichmentRuns(): EnrichmentRun[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            sequence,
+            id,
+            developer_signup_id,
+            company_id,
+            normalized_company_domain,
+            status,
+            requested_at,
+            started_at,
+            finished_at,
+            failure_reason
+          FROM enrichment_runs
+          ORDER BY sequence DESC
+        `,
+      )
+      .all() as EnrichmentRunRow[];
+
+    return rows.map(mapEnrichmentRunRow);
+  }
+
+  getEnrichmentRun(id: string): EnrichmentRun | null {
+    const row = this.getEnrichmentRunRow(id);
+
+    return row ? mapEnrichmentRunRow(row) : null;
+  }
+
+  markEnrichmentRunResearching(id: string, startedAt: string): EnrichmentRun | null {
+    this.database.run(
+      `
+        UPDATE enrichment_runs
+        SET status = ?,
+            started_at = COALESCE(started_at, ?)
+        WHERE id = ?
+      `,
+      ["researching", startedAt, id],
+    );
+
+    return this.syncLeadStatusForEnrichmentRun(id);
+  }
+
+  finishEnrichmentRun(
+    id: string,
+    completion: EnrichmentRunCompletion,
+    finishedAt: string,
+  ): EnrichmentRun | null {
+    this.database.run(
+      `
+        UPDATE enrichment_runs
+        SET status = ?,
+            finished_at = ?,
+            failure_reason = ?
+        WHERE id = ?
+      `,
+      [
+        completion.status,
+        finishedAt,
+        completion.status === "failed" ? completion.failureReason : null,
+        id,
+      ],
+    );
+
+    return this.syncLeadStatusForEnrichmentRun(id);
+  }
+
   private migrate(): void {
     this.database.run(`
       CREATE TABLE IF NOT EXISTS developer_signups (
@@ -239,6 +346,23 @@ export class PrototypeStore {
         signup_count INTEGER NOT NULL,
         latest_signup_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+      )
+    `);
+
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS enrichment_runs (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        developer_signup_id TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        normalized_company_domain TEXT NOT NULL,
+        status TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        failure_reason TEXT,
+        FOREIGN KEY (developer_signup_id) REFERENCES developer_signups(id),
         FOREIGN KEY (company_id) REFERENCES companies(id)
       )
     `);
@@ -314,7 +438,51 @@ export class PrototypeStore {
     };
   }
 
-  private ensureLeadQueueRecord(company: Company, signedUpAt: string): void {
+  private createEnrichmentRun(
+    developerSignup: DeveloperSignup,
+    company: Company,
+  ): EnrichmentRun {
+    const result = this.database.run(
+      `
+        INSERT INTO enrichment_runs (
+          developer_signup_id,
+          company_id,
+          normalized_company_domain,
+          status,
+          requested_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      [
+        developerSignup.id,
+        company.id,
+        company.normalizedCompanyDomain,
+        "pending",
+        developerSignup.signedUpAt,
+      ],
+    );
+    const id = `enrichment_run_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE enrichment_runs SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+
+    return {
+      id,
+      developerSignupId: developerSignup.id,
+      companyId: company.id,
+      normalizedCompanyDomain: company.normalizedCompanyDomain,
+      status: "pending",
+      requestedAt: developerSignup.signedUpAt,
+    };
+  }
+
+  private ensureLeadQueueRecord(
+    company: Company,
+    signedUpAt: string,
+    enrichmentStatus: EnrichmentStatus,
+  ): void {
     const existingLead = this.database
       .query(
         `
@@ -337,10 +505,15 @@ export class PrototypeStore {
         `
           UPDATE leads
           SET signup_count = signup_count + 1,
-              latest_signup_at = ?
+              latest_signup_at = ?,
+              enrichment_status = ?
           WHERE id = ?
         `,
-        [maxIsoTimestamp(existingLead.latest_signup_at, signedUpAt), existingLead.id],
+        [
+          maxIsoTimestamp(existingLead.latest_signup_at, signedUpAt),
+          enrichmentStatus,
+          existingLead.id,
+        ],
       );
       return;
     }
@@ -353,10 +526,10 @@ export class PrototypeStore {
           signup_count,
           latest_signup_at,
           created_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-      `,
-      [company.id, "pending", 1, signedUpAt, signedUpAt],
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `,
+      [company.id, enrichmentStatus, 1, signedUpAt, signedUpAt],
     );
     const id = `lead_${result.lastInsertRowid}`;
 
@@ -364,6 +537,61 @@ export class PrototypeStore {
       id,
       result.lastInsertRowid,
     ]);
+  }
+
+  private getEnrichmentRunRow(id: string): EnrichmentRunRow | null {
+    return this.database
+      .query(
+        `
+          SELECT
+            sequence,
+            id,
+            developer_signup_id,
+            company_id,
+            normalized_company_domain,
+            status,
+            requested_at,
+            started_at,
+            finished_at,
+            failure_reason
+          FROM enrichment_runs
+          WHERE id = ?
+        `,
+      )
+      .get(id) as EnrichmentRunRow | null;
+  }
+
+  private syncLeadStatusForEnrichmentRun(id: string): EnrichmentRun | null {
+    const row = this.getEnrichmentRunRow(id);
+
+    if (!row) {
+      return null;
+    }
+
+    const latestRun = this.database
+      .query(
+        `
+          SELECT sequence
+          FROM enrichment_runs
+          WHERE company_id = ?
+          ORDER BY sequence DESC
+          LIMIT 1
+        `,
+      )
+      .get(row.company_id) as { sequence: number } | null;
+
+    if (latestRun?.sequence === row.sequence) {
+      this.database.run(
+        `
+          UPDATE leads
+          SET enrichment_status = ?
+          WHERE company_id = ?
+        `,
+        [row.status, row.company_id],
+      );
+    }
+
+    return mapEnrichmentRunRow(row);
   }
 }
 
@@ -385,6 +613,20 @@ function mapCompanyRow(row: CompanyRow): Company {
     id: row.id,
     normalizedCompanyDomain: row.normalized_company_domain,
     createdAt: row.created_at,
+  };
+}
+
+function mapEnrichmentRunRow(row: EnrichmentRunRow): EnrichmentRun {
+  return {
+    id: row.id,
+    developerSignupId: row.developer_signup_id,
+    companyId: row.company_id,
+    normalizedCompanyDomain: row.normalized_company_domain,
+    status: row.status,
+    requestedAt: row.requested_at,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
+    failureReason: row.failure_reason ?? undefined,
   };
 }
 

@@ -1,7 +1,8 @@
-import type { DeveloperSignup, LeadQueueRecord } from "./signups";
+import type { DeveloperSignup, EnrichmentRun, LeadQueueRecord } from "./signups";
 
 interface DashboardOptions {
   developerSignups?: DeveloperSignup[];
+  enrichmentRuns?: EnrichmentRun[];
   leadQueue?: LeadQueueRecord[];
 }
 
@@ -51,6 +52,28 @@ export function renderDashboard(options: DashboardOptions = {}): string {
     `
       <tr>
         <td colspan="4">No Demo Signup Payloads yet.</td>
+      </tr>
+    `;
+  const enrichmentRunRows = (options.enrichmentRuns ?? [])
+    .map(
+      (enrichmentRun) => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(enrichmentRun.id)}</strong>
+            <span>${escapeHtml(enrichmentRun.normalizedCompanyDomain)}</span>
+          </td>
+          <td><mark data-status="${escapeHtml(enrichmentRun.status)}">${escapeHtml(enrichmentRun.status)}</mark></td>
+          <td>${escapeHtml(formatLatestSignup(enrichmentRun.requestedAt))}</td>
+          <td>${escapeHtml(enrichmentRun.failureReason ?? "None")}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const enrichmentRunBody =
+    enrichmentRunRows ||
+    `
+      <tr>
+        <td colspan="4">No Enrichment Runs yet.</td>
       </tr>
     `;
   const selectedLead = leadQueue[0];
@@ -304,6 +327,21 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         color: #195b9d;
       }
 
+      mark[data-status="researching"] {
+        background: #eaf7fb;
+        color: #075f73;
+      }
+
+      mark[data-status="failed"] {
+        background: #ffe8e8;
+        color: #a02727;
+      }
+
+      mark[data-status="unqualified"] {
+        background: #f2f4f7;
+        color: #526070;
+      }
+
       .detail {
         padding: 18px;
       }
@@ -457,6 +495,20 @@ export function renderDashboard(options: DashboardOptions = {}): string {
                 <tbody>${developerSignupBody}</tbody>
               </table>
             </section>
+            <section class="panel" aria-label="Enrichment Runs">
+              <table>
+                <caption>Enrichment Runs</caption>
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>Status</th>
+                    <th>Requested</th>
+                    <th>Failure Reason</th>
+                  </tr>
+                </thead>
+                <tbody>${enrichmentRunBody}</tbody>
+              </table>
+            </section>
           </div>
           <section class="panel detail" aria-label="Selected Lead detail">
 ${selectedLeadDetail}
@@ -473,7 +525,7 @@ function formatSignupQualification(signup: DeveloperSignup): string {
     return "Eligible for enrichment";
   }
 
-  return `Unqualified Signup: ${signup.unqualifiedReason}`;
+  return `Unqualified Signup: <mark data-status="unqualified">unqualified</mark><span>${escapeHtml(signup.unqualifiedReason ?? "unqualified")}</span>`;
 }
 
 function escapeHtml(value: string): string {

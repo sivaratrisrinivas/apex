@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, shows it in a sales dashboard, and prepares the app for later enrichment with company research, evidence, and lead scoring.
 
-The current build includes the WSL-native Bun app foundation, a first Apex Dashboard shell, demo signup intake, and a SQLite-backed Prototype Store. Later issues add enrichment, scoring, and outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, and the asynchronous Enrichment Run lifecycle. Later issues plug in real or fixture-backed enrichment, scoring, and outreach drafts.
 
 ## Why It Exists
 
@@ -81,6 +81,8 @@ curl -s http://localhost:3000/demo-signups \
   -d '{"email":"engineer@modal.com","name":"Ada Lovelace"}'
 ```
 
+The response includes the stored Developer Signup and, for qualified company domains, the pending Enrichment Run that was created for that Company. The dashboard then advances the run to `researching` asynchronously so signup intake stays responsive while research is still in progress.
+
 ## Prototype Store
 
 The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
@@ -91,7 +93,9 @@ Use `APEX_PROTOTYPE_STORE_PATH` to point a demo at a different store file:
 APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
 ```
 
-Qualified Developer Signups create or reuse one Company per Normalized Company Domain. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count and latest-signup urgency signals.
+Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
+
+Until the fake or live Parallel enrichment issues are implemented, the local server records runs as `researching`. The app-level enrichment worker interface already supports `completed`, `partial`, and `failed` outcomes, and the dashboard renders those states when a worker returns them.
 
 ## Current Status
 
@@ -100,11 +104,13 @@ This repo currently has:
 - a Bun server that serves the Apex Dashboard at `/`
 - a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
 - domain classification for qualified Developer Signups and visible Unqualified Signups
-- a SQLite-backed Prototype Store that persists Developer Signups, Companies, and initial Lead Queue records
+- a SQLite-backed Prototype Store that persists Developer Signups, Companies, Enrichment Runs, and initial Lead Queue records
 - Company deduplication by Normalized Company Domain, while preserving every Developer Signup
 - one active Lead Queue record per Company with signup count and latest-signup urgency signals
+- asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
+- visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, and Lead Queue urgency signals
+- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, and Enrichment Run lifecycle behavior
 - WSL-focused setup notes
 
-The next implementation issue is the asynchronous Enrichment Run lifecycle.
+The next enrichment issues add fake local fixtures and the live Core2x Parallel client behind the existing lifecycle.
