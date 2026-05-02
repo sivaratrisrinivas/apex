@@ -1,62 +1,36 @@
-import type { DeveloperSignup } from "./signups";
+import type { DeveloperSignup, LeadQueueRecord } from "./signups";
 
 interface DashboardOptions {
   developerSignups?: DeveloperSignup[];
+  leadQueue?: LeadQueueRecord[];
 }
 
-const queueRows = [
-  {
-    company: "Modal",
-    score: 95,
-    status: "completed",
-    confidence: "High",
-    signups: 3,
-    action: "Route to enterprise AE",
-  },
-  {
-    company: "Perplexity",
-    score: 91,
-    status: "researching",
-    confidence: "Building",
-    signups: 2,
-    action: "Watch funding signal",
-  },
-  {
-    company: "Runpod",
-    score: 88,
-    status: "partial",
-    confidence: "Medium",
-    signups: 1,
-    action: "Verify GPU workload",
-  },
-  {
-    company: "Anysphere",
-    score: 84,
-    status: "completed",
-    confidence: "High",
-    signups: 4,
-    action: "Draft technical outreach",
-  },
-];
-
 export function renderDashboard(options: DashboardOptions = {}): string {
-  const rows = queueRows
+  const leadQueue = options.leadQueue ?? [];
+  const rows = leadQueue
     .map(
       (row) => `
         <tr>
           <td>
-            <strong>${row.company}</strong>
-            <span>api.${row.company.toLowerCase()}.com</span>
+            <strong>${escapeHtml(row.companyName)}</strong>
+            <span>${escapeHtml(row.normalizedCompanyDomain)}</span>
           </td>
-          <td><b>${row.score}</b></td>
-          <td><mark data-status="${row.status}">${row.status}</mark></td>
-          <td>${row.confidence}</td>
-          <td>${row.signups}</td>
-          <td>${row.action}</td>
+          <td><b>${formatLeadScore(row)}</b></td>
+          <td><mark data-status="${escapeHtml(row.enrichmentStatus)}">${escapeHtml(row.enrichmentStatus)}</mark></td>
+          <td>${escapeHtml(row.evidenceConfidence)}</td>
+          <td>${row.signupCount}<span>${escapeHtml(formatLatestSignup(row.latestSignupAt))}</span></td>
+          <td>${escapeHtml(row.suggestedNextAction)}</td>
         </tr>
       `,
     )
     .join("");
+  const leadQueueBody =
+    rows ||
+    `
+      <tr>
+        <td colspan="6">No Leads yet.</td>
+      </tr>
+    `;
   const developerSignupRows = (options.developerSignups ?? [])
     .map(
       (signup) => `
@@ -79,6 +53,28 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         <td colspan="4">No Demo Signup Payloads yet.</td>
       </tr>
     `;
+  const selectedLead = leadQueue[0];
+  const selectedLeadDetail = selectedLead
+    ? `
+            <h2>${escapeHtml(selectedLead.companyName)} details</h2>
+            <div class="score score-empty">--</div>
+            <dl>
+              <div><dt>Normalized Company Domain</dt><dd>${escapeHtml(selectedLead.normalizedCompanyDomain)}</dd></div>
+              <div><dt>Enrichment Status</dt><dd>${escapeHtml(selectedLead.enrichmentStatus)}</dd></div>
+              <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
+              <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
+            </dl>
+            <p class="evidence">
+              Evidence Basis will appear after enrichment completes.
+            </p>
+      `
+    : `
+            <h2>No Lead selected</h2>
+            <div class="score score-empty">--</div>
+            <p class="evidence">
+              Submit a qualified Demo Signup Payload to create the first Lead Queue record.
+            </p>
+      `;
 
   return `<!doctype html>
 <html lang="en">
@@ -303,6 +299,11 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         color: var(--amber);
       }
 
+      mark[data-status="pending"] {
+        background: #eef5ff;
+        color: #195b9d;
+      }
+
       .detail {
         padding: 18px;
       }
@@ -325,6 +326,12 @@ export function renderDashboard(options: DashboardOptions = {}): string {
           conic-gradient(var(--cyan) 0 95%, #e6eef6 95%);
         font-size: 30px;
         font-weight: 800;
+      }
+
+      .score-empty {
+        background: #eef5ff;
+        color: #637083;
+        font-size: 24px;
       }
 
       .detail dl {
@@ -433,7 +440,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
                     <th>Suggested Next Action</th>
                   </tr>
                 </thead>
-                <tbody>${rows}</tbody>
+                <tbody>${leadQueueBody}</tbody>
               </table>
             </section>
             <section class="panel" aria-label="Developer Signups">
@@ -452,18 +459,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
             </section>
           </div>
           <section class="panel detail" aria-label="Selected Lead detail">
-            <h2>Modal evidence</h2>
-            <div class="score">95</div>
-            <dl>
-              <div><dt>Purchasing Capacity</dt><dd>High</dd></div>
-              <div><dt>Compute Intensity</dt><dd>GPU-heavy</dd></div>
-              <div><dt>Parallel Fit</dt><dd>Strong</dd></div>
-              <div><dt>Sales Timing</dt><dd>Immediate</dd></div>
-            </dl>
-            <p class="evidence">
-              Evidence Basis preview: recent infrastructure hiring, AI workload language,
-              and multiple Developer Signups from the same Company.
-            </p>
+${selectedLeadDetail}
           </section>
         </div>
       </main>
@@ -486,4 +482,16 @@ function escapeHtml(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function formatLeadScore(lead: LeadQueueRecord): string {
+  return lead.leadScore === null ? "Unscored" : String(lead.leadScore);
+}
+
+function formatLatestSignup(signedUpAt: string): string {
+  return new Date(signedUpAt).toLocaleString("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  });
 }

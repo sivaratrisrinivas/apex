@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, shows it in a sales dashboard, and prepares the app for later enrichment with company research, evidence, and lead scoring.
 
-The current build includes the WSL-native Bun app foundation, a first Apex Dashboard shell, and demo signup intake. Later issues add storage, enrichment, scoring, and outreach drafts.
+The current build includes the WSL-native Bun app foundation, a first Apex Dashboard shell, demo signup intake, and a SQLite-backed Prototype Store. Later issues add enrichment, scoring, and outreach drafts.
 
 ## Why It Exists
 
@@ -81,6 +81,18 @@ curl -s http://localhost:3000/demo-signups \
   -d '{"email":"engineer@modal.com","name":"Ada Lovelace"}'
 ```
 
+## Prototype Store
+
+The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
+
+Use `APEX_PROTOTYPE_STORE_PATH` to point a demo at a different store file:
+
+```bash
+APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
+```
+
+Qualified Developer Signups create or reuse one Company per Normalized Company Domain. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count and latest-signup urgency signals.
+
 ## Current Status
 
 This repo currently has:
@@ -88,8 +100,11 @@ This repo currently has:
 - a Bun server that serves the Apex Dashboard at `/`
 - a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
 - domain classification for qualified Developer Signups and visible Unqualified Signups
-- a styled dashboard shell with a lead queue and selected lead detail panel
-- automated tests for the dashboard route, demo signup validation, and domain classification
+- a SQLite-backed Prototype Store that persists Developer Signups, Companies, and initial Lead Queue records
+- Company deduplication by Normalized Company Domain, while preserving every Developer Signup
+- one active Lead Queue record per Company with signup count and latest-signup urgency signals
+- a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
+- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, and Lead Queue urgency signals
 - WSL-focused setup notes
 
-The next implementation issue is persistence: keeping Companies, Developer Signups, and Lead Queue records in a Prototype Store between restarts.
+The next implementation issue is the asynchronous Enrichment Run lifecycle.

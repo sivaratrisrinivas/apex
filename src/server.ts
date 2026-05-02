@@ -5,8 +5,14 @@ export interface ApexApp {
   fetch(request: Request): Response | Promise<Response>;
 }
 
-export function createApp(): ApexApp {
-  const store = new PrototypeStore();
+export interface CreateAppOptions {
+  prototypeStorePath?: string;
+}
+
+export function createApp(options: CreateAppOptions = {}): ApexApp {
+  const store = new PrototypeStore({
+    databasePath: options.prototypeStorePath,
+  });
 
   return {
     async fetch(request: Request): Promise<Response> {
@@ -16,6 +22,7 @@ export function createApp(): ApexApp {
         return new Response(
           renderDashboard({
             developerSignups: store.listDeveloperSignups(),
+            leadQueue: store.listLeadQueue(),
           }),
           {
             headers: {
@@ -64,7 +71,9 @@ function jsonResponse(body: unknown, status: number): Response {
 
 if (import.meta.main) {
   const port = Number(process.env.PORT ?? 3000);
-  const app = createApp();
+  const app = createApp({
+    prototypeStorePath: process.env.APEX_PROTOTYPE_STORE_PATH ?? ".apex/prototype.sqlite",
+  });
 
   Bun.serve({
     port,

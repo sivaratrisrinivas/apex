@@ -1,9 +1,15 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
+import { Database } from "bun:sqlite";
+
 export type SignupQualification = "qualified" | "unqualified";
 export type UnqualifiedSignupReason =
   | "personal-domain"
   | "educational-domain"
   | "disposable-domain"
   | "ambiguous-domain";
+export type InitialEnrichmentStatus = "pending";
 
 export interface DemoSignupPayload {
   email: unknown;
@@ -23,6 +29,25 @@ export interface DeveloperSignup {
   unqualifiedReason?: UnqualifiedSignupReason;
 }
 
+export interface Company {
+  id: string;
+  normalizedCompanyDomain: string;
+  createdAt: string;
+}
+
+export interface LeadQueueRecord {
+  id: string;
+  companyId: string;
+  companyName: string;
+  normalizedCompanyDomain: string;
+  enrichmentStatus: InitialEnrichmentStatus;
+  leadScore: null;
+  evidenceConfidence: "Pending";
+  signupCount: number;
+  latestSignupAt: string;
+  suggestedNextAction: string;
+}
+
 export interface SignupValidationError {
   error: string;
 }
@@ -31,9 +56,50 @@ export type SignupIntakeResult =
   | { ok: true; developerSignup: DeveloperSignup }
   | { ok: false; status: 400; body: SignupValidationError };
 
+interface PrototypeStoreOptions {
+  databasePath?: string;
+}
+
+interface DeveloperSignupRow {
+  id: string;
+  email: string;
+  source: string;
+  name: string | null;
+  signed_up_at: string;
+  normalized_company_domain: string;
+  qualification: SignupQualification;
+  unqualified_reason: UnqualifiedSignupReason | null;
+}
+
+interface CompanyRow {
+  id: string;
+  normalized_company_domain: string;
+  created_at: string;
+}
+
+interface LeadRow {
+  id: string;
+  company_id: string;
+  normalized_company_domain: string;
+  enrichment_status: InitialEnrichmentStatus;
+  signup_count: number;
+  latest_signup_at: string;
+}
+
 export class PrototypeStore {
-  private developerSignups: DeveloperSignup[] = [];
-  private nextSignupNumber = 1;
+  private database: Database;
+
+  constructor(options: PrototypeStoreOptions = {}) {
+    const databasePath = options.databasePath ?? ":memory:";
+
+    if (databasePath !== ":memory:") {
+      mkdirSync(dirname(databasePath), { recursive: true });
+    }
+
+    this.database = new Database(databasePath);
+    this.database.run("PRAGMA foreign_keys = ON");
+    this.migrate();
+  }
 
   createDeveloperSignup(payload: unknown): SignupIntakeResult {
     const demoSignupPayload = parseDemoSignupPayload(payload);
@@ -45,7 +111,7 @@ export class PrototypeStore {
 
     const domainClassification = classifyDomain(parsedEmail.domain);
     const developerSignup: DeveloperSignup = {
-      id: `developer_signup_${this.nextSignupNumber++}`,
+      id: "",
       email: parsedEmail.email,
       source: parseOptionalString(demoSignupPayload.source) ?? "demo",
       name: parseOptionalString(demoSignupPayload.name),
@@ -56,7 +122,15 @@ export class PrototypeStore {
       unqualifiedReason: domainClassification.unqualifiedReason,
     };
 
-    this.developerSignups.unshift(developerSignup);
+    developerSignup.id = this.insertDeveloperSignup(developerSignup);
+
+    if (developerSignup.qualification === "qualified") {
+      const company = this.ensureCompany(
+        developerSignup.normalizedCompanyDomain,
+        developerSignup.signedUpAt,
+      );
+      this.ensureLeadQueueRecord(company, developerSignup.signedUpAt);
+    }
 
     return {
       ok: true,
@@ -65,8 +139,267 @@ export class PrototypeStore {
   }
 
   listDeveloperSignups(): DeveloperSignup[] {
-    return [...this.developerSignups];
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            id,
+            email,
+            source,
+            name,
+            signed_up_at,
+            normalized_company_domain,
+            qualification,
+            unqualified_reason
+          FROM developer_signups
+          ORDER BY sequence DESC
+        `,
+      )
+      .all() as DeveloperSignupRow[];
+
+    return rows.map(mapDeveloperSignupRow);
   }
+
+  listCompanies(): Company[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT id, normalized_company_domain, created_at
+          FROM companies
+          ORDER BY sequence DESC
+        `,
+      )
+      .all() as CompanyRow[];
+
+    return rows.map(mapCompanyRow);
+  }
+
+  listLeadQueue(): LeadQueueRecord[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            leads.id,
+            leads.company_id,
+            companies.normalized_company_domain,
+            leads.enrichment_status,
+            leads.signup_count,
+            leads.latest_signup_at
+          FROM leads
+          JOIN companies ON companies.id = leads.company_id
+          ORDER BY leads.latest_signup_at DESC, leads.sequence DESC
+        `,
+      )
+      .all() as LeadRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      companyId: row.company_id,
+      companyName: formatCompanyName(row.normalized_company_domain),
+      normalizedCompanyDomain: row.normalized_company_domain,
+      enrichmentStatus: row.enrichment_status,
+      leadScore: null,
+      evidenceConfidence: "Pending",
+      signupCount: row.signup_count,
+      latestSignupAt: row.latest_signup_at,
+      suggestedNextAction: "Start enrichment",
+    }));
+  }
+
+  private migrate(): void {
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS developer_signups (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        email TEXT NOT NULL,
+        source TEXT NOT NULL,
+        name TEXT,
+        signed_up_at TEXT NOT NULL,
+        normalized_company_domain TEXT NOT NULL,
+        qualification TEXT NOT NULL,
+        unqualified_reason TEXT
+      )
+    `);
+
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS companies (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        normalized_company_domain TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      )
+    `);
+
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS leads (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        company_id TEXT NOT NULL UNIQUE,
+        enrichment_status TEXT NOT NULL,
+        signup_count INTEGER NOT NULL,
+        latest_signup_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (company_id) REFERENCES companies(id)
+      )
+    `);
+  }
+
+  private insertDeveloperSignup(developerSignup: DeveloperSignup): string {
+    const result = this.database.run(
+      `
+        INSERT INTO developer_signups (
+          email,
+          source,
+          name,
+          signed_up_at,
+          normalized_company_domain,
+          qualification,
+          unqualified_reason
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        developerSignup.email,
+        developerSignup.source,
+        developerSignup.name ?? null,
+        developerSignup.signedUpAt,
+        developerSignup.normalizedCompanyDomain,
+        developerSignup.qualification,
+        developerSignup.unqualifiedReason ?? null,
+      ],
+    );
+    const id = `developer_signup_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE developer_signups SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+
+    return id;
+  }
+
+  private ensureCompany(normalizedCompanyDomain: string, createdAt: string): Company {
+    const existingCompany = this.database
+      .query(
+        `
+          SELECT id, normalized_company_domain, created_at
+          FROM companies
+          WHERE normalized_company_domain = ?
+        `,
+      )
+      .get(normalizedCompanyDomain) as CompanyRow | null;
+
+    if (existingCompany) {
+      return mapCompanyRow(existingCompany);
+    }
+
+    const result = this.database.run(
+      `
+        INSERT INTO companies (normalized_company_domain, created_at)
+        VALUES (?, ?)
+      `,
+      [normalizedCompanyDomain, createdAt],
+    );
+    const id = `company_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE companies SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+
+    return {
+      id,
+      normalizedCompanyDomain,
+      createdAt,
+    };
+  }
+
+  private ensureLeadQueueRecord(company: Company, signedUpAt: string): void {
+    const existingLead = this.database
+      .query(
+        `
+          SELECT
+            leads.id,
+            leads.company_id,
+            companies.normalized_company_domain,
+            leads.enrichment_status,
+            leads.signup_count,
+            leads.latest_signup_at
+          FROM leads
+          JOIN companies ON companies.id = leads.company_id
+          WHERE leads.company_id = ?
+        `,
+      )
+      .get(company.id) as LeadRow | null;
+
+    if (existingLead) {
+      this.database.run(
+        `
+          UPDATE leads
+          SET signup_count = signup_count + 1,
+              latest_signup_at = ?
+          WHERE id = ?
+        `,
+        [maxIsoTimestamp(existingLead.latest_signup_at, signedUpAt), existingLead.id],
+      );
+      return;
+    }
+
+    const result = this.database.run(
+      `
+        INSERT INTO leads (
+          company_id,
+          enrichment_status,
+          signup_count,
+          latest_signup_at,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      [company.id, "pending", 1, signedUpAt, signedUpAt],
+    );
+    const id = `lead_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE leads SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+  }
+}
+
+function mapDeveloperSignupRow(row: DeveloperSignupRow): DeveloperSignup {
+  return {
+    id: row.id,
+    email: row.email,
+    source: row.source,
+    name: row.name ?? undefined,
+    signedUpAt: row.signed_up_at,
+    normalizedCompanyDomain: row.normalized_company_domain,
+    qualification: row.qualification,
+    unqualifiedReason: row.unqualified_reason ?? undefined,
+  };
+}
+
+function mapCompanyRow(row: CompanyRow): Company {
+  return {
+    id: row.id,
+    normalizedCompanyDomain: row.normalized_company_domain,
+    createdAt: row.created_at,
+  };
+}
+
+function maxIsoTimestamp(first: string, second: string): string {
+  return first > second ? first : second;
+}
+
+function formatCompanyName(normalizedCompanyDomain: string): string {
+  const [label] = normalizedCompanyDomain.split(".");
+
+  return label
+    .split("-")
+    .filter((part) => part.length > 0)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function parseDemoSignupPayload(payload: unknown): DemoSignupPayload {
