@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, shows it in a sales dashboard, and prepares the app for later enrichment with company research, evidence, and lead scoring.
 
-The current build includes the WSL-native Bun app foundation and a first Apex Dashboard shell. Later issues add signup intake, storage, enrichment, scoring, and outreach drafts.
+The current build includes the WSL-native Bun app foundation, a first Apex Dashboard shell, and demo signup intake. Later issues add storage, enrichment, scoring, and outreach drafts.
 
 ## Why It Exists
 
@@ -73,13 +73,23 @@ If port 3000 is already in use, choose another WSL-local port:
 PORT=3010 bun run dev
 ```
 
+Submit a Demo Signup Payload:
+
+```bash
+curl -s http://localhost:3000/demo-signups \
+  -H 'content-type: application/json' \
+  -d '{"email":"engineer@modal.com","name":"Ada Lovelace"}'
+```
+
 ## Current Status
 
 This repo currently has:
 
 - a Bun server that serves the Apex Dashboard at `/`
+- a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
+- domain classification for qualified Developer Signups and visible Unqualified Signups
 - a styled dashboard shell with a lead queue and selected lead detail panel
-- smoke tests for the dashboard route and unknown routes
+- automated tests for the dashboard route, demo signup validation, and domain classification
 - WSL-focused setup notes
 
-The next implementation issue is signup intake: accepting a demo email payload and classifying company versus non-company domains.
+The next implementation issue is persistence: keeping Companies, Developer Signups, and Lead Queue records in a Prototype Store between restarts.

@@ -1,3 +1,9 @@
+import type { DeveloperSignup } from "./signups";
+
+interface DashboardOptions {
+  developerSignups?: DeveloperSignup[];
+}
+
 const queueRows = [
   {
     company: "Modal",
@@ -33,7 +39,7 @@ const queueRows = [
   },
 ];
 
-export function renderDashboard(): string {
+export function renderDashboard(options: DashboardOptions = {}): string {
   const rows = queueRows
     .map(
       (row) => `
@@ -51,6 +57,28 @@ export function renderDashboard(): string {
       `,
     )
     .join("");
+  const developerSignupRows = (options.developerSignups ?? [])
+    .map(
+      (signup) => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(signup.email)}</strong>
+            <span>${escapeHtml(signup.name ?? "Unnamed Developer Signup")}</span>
+          </td>
+          <td>${escapeHtml(signup.normalizedCompanyDomain)}</td>
+          <td>${formatSignupQualification(signup)}</td>
+          <td>${escapeHtml(signup.source)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const developerSignupBody =
+    developerSignupRows ||
+    `
+      <tr>
+        <td colspan="4">No Demo Signup Payloads yet.</td>
+      </tr>
+    `;
 
   return `<!doctype html>
 <html lang="en">
@@ -181,6 +209,12 @@ export function renderDashboard(): string {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 360px;
         gap: 18px;
+      }
+
+      .queue-column {
+        display: grid;
+        gap: 18px;
+        min-width: 0;
       }
 
       .panel {
@@ -385,22 +419,38 @@ export function renderDashboard(): string {
           <button type="button">Submit Signup</button>
         </section>
         <div class="grid">
-          <section class="panel" aria-label="Lead Queue">
-            <table>
-              <caption>Lead Queue</caption>
-              <thead>
-                <tr>
-                  <th>Company</th>
-                  <th>Score</th>
-                  <th>Status</th>
-                  <th>Confidence</th>
-                  <th>Signups</th>
-                  <th>Suggested Next Action</th>
-                </tr>
-              </thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </section>
+          <div class="queue-column">
+            <section class="panel" aria-label="Lead Queue">
+              <table>
+                <caption>Lead Queue</caption>
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Confidence</th>
+                    <th>Signups</th>
+                    <th>Suggested Next Action</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </section>
+            <section class="panel" aria-label="Developer Signups">
+              <table>
+                <caption>Developer Signups</caption>
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Normalized Company Domain</th>
+                    <th>Qualification</th>
+                    <th>Source</th>
+                  </tr>
+                </thead>
+                <tbody>${developerSignupBody}</tbody>
+              </table>
+            </section>
+          </div>
           <section class="panel detail" aria-label="Selected Lead detail">
             <h2>Modal evidence</h2>
             <div class="score">95</div>
@@ -420,4 +470,20 @@ export function renderDashboard(): string {
     </div>
   </body>
 </html>`;
+}
+
+function formatSignupQualification(signup: DeveloperSignup): string {
+  if (signup.qualification === "qualified") {
+    return "Eligible for enrichment";
+  }
+
+  return `Unqualified Signup: ${signup.unqualifiedReason}`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
