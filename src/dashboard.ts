@@ -92,6 +92,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
               <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
               <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
             </dl>
+            ${formatManualRefreshAction(selectedLead)}
             ${formatScoreBreakdown(selectedLead)}
             ${formatScoreReasons(selectedLead.scoreReasons)}
             ${formatKeyReasons(selectedLead.keyReasons)}
@@ -272,6 +273,15 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         background: #111827;
         color: white;
         font-weight: 720;
+      }
+
+      .refresh-action {
+        margin: 14px 0 18px;
+      }
+
+      .refresh-action button {
+        width: 100%;
+        background: #075f73;
       }
 
       table {
@@ -557,6 +567,15 @@ function formatLeadScoreBadge(lead: LeadQueueRecord): string {
   }
 
   return `<div class="score">${lead.leadScore}</div>`;
+}
+
+function formatManualRefreshAction(lead: LeadQueueRecord): string {
+  return `
+            <form class="refresh-action" method="post" action="/manual-refreshes">
+              <input type="hidden" name="normalizedCompanyDomain" value="${escapeHtml(lead.normalizedCompanyDomain)}" />
+              <button type="submit">Manual refresh</button>
+            </form>
+  `;
 }
 
 function formatScoreBreakdown(lead: LeadQueueRecord): string {

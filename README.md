@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, and evidence-aware Lead Score calculation. Later issues plug in freshness controls, richer dashboard interactions, and outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, and seven-day Freshness Window controls with manual refresh. Later issues plug in richer dashboard interactions and outreach drafts.
 
 ## Why It Exists
 
@@ -91,6 +91,24 @@ APEX_ENRICHMENT_MODE=fake bun run dev
 
 The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
 
+## Freshness Window and Manual Refresh
+
+Apex reuses a fresh **Company Enrichment** for later **Developer Signups** from the same **Company** when the latest enrichment is no more than seven days old. Reuse avoids unnecessary Parallel spend while still preserving the new Developer Signup and updating the single active Lead Queue record with signup count, latest signup, Sales Timing, and Lead Score.
+
+When the latest Company Enrichment is older than the seven-day **Freshness Window**, a later qualified signup starts a new **Enrichment Run**. The Lead remains visible in the queue and shows the latest run status while new research is in progress.
+
+The selected Lead detail panel includes a **Manual refresh** action for demo control. It forces a new Enrichment Run for the selected Normalized Company Domain even when the existing enrichment is still fresh.
+
+You can also trigger the same refresh endpoint from WSL:
+
+```bash
+curl -i http://localhost:3000/manual-refreshes \
+  -H 'content-type: application/x-www-form-urlencoded' \
+  -d 'normalizedCompanyDomain=modal.com'
+```
+
+Form submissions redirect back to `/`; JSON-style callers receive the created Enrichment Run payload.
+
 ## Lead Scoring
 
 Completed and partial Company Enrichments produce a Lead Score from the agreed Apex dimensions:
@@ -128,6 +146,8 @@ Without `PARALLEL_API_KEY` or `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichmen
 
 Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
 
+Fresh Company Enrichments are reused inside the seven-day Freshness Window. Stale enrichments and manual refresh requests create new Enrichment Runs for the same Company without duplicating the active Lead.
+
 The local server records runs as `researching` until the configured enrichment worker finishes. The live Parallel path stores completed **Company Enrichments** and **Evidence Basis** from the Task API result; API errors produce a failed **Enrichment Status** with the visible failure reason. The app-level enrichment worker interface also supports fake workers for tests and local fixture-backed demos.
 
 ## Current Status
@@ -136,10 +156,13 @@ This repo currently has:
 
 - a Bun server that serves the Apex Dashboard at `/`
 - a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
+- a manual refresh endpoint at `POST /manual-refreshes` for forcing a new Enrichment Run
 - domain classification for qualified Developer Signups and visible Unqualified Signups
 - a SQLite-backed Prototype Store that persists Developer Signups, Companies, Enrichment Runs, and initial Lead Queue records
 - Company deduplication by Normalized Company Domain, while preserving every Developer Signup
 - one active Lead Queue record per Company with signup count and latest-signup urgency signals
+- seven-day Freshness Window reuse for fresh Company Enrichments, with stale signups starting new Enrichment Runs
+- a dashboard Manual refresh action for selected Leads
 - asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
 - live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set
 - fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
@@ -149,7 +172,7 @@ This repo currently has:
 - a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, fake enrichment, and Lead Score behavior
+- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, and Lead Score behavior
 - WSL-focused setup notes
 
-The next enrichment issues add freshness, dashboard detail behavior, and outreach draft generation behind the existing lifecycle.
+The next enrichment issues add richer dashboard detail behavior and outreach draft generation behind the existing lifecycle.

@@ -81,6 +81,43 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         );
       }
 
+      if (url.pathname === "/manual-refreshes" && request.method === "POST") {
+        const isFormPost = isUrlEncodedFormPost(request);
+        const result = store.requestManualRefresh(
+          await readStructuredPayload(request),
+        );
+
+        if (!result.ok) {
+          return jsonResponse(result.body, result.status);
+        }
+
+        const enrichmentRunId = result.enrichmentRun.id;
+
+        queueMicrotask(() => {
+          void runEnrichmentRun(
+            store,
+            enrichmentRunId,
+            configuredEnrichmentWorker,
+          );
+        });
+
+        if (isFormPost) {
+          return new Response(null, {
+            status: 303,
+            headers: {
+              location: "/",
+            },
+          });
+        }
+
+        return jsonResponse(
+          {
+            enrichmentRun: result.enrichmentRun,
+          },
+          202,
+        );
+      }
+
       return new Response("Not found", { status: 404 });
     },
   };
@@ -153,6 +190,20 @@ async function readJsonPayload(request: Request): Promise<unknown> {
   } catch {
     return {};
   }
+}
+
+async function readStructuredPayload(request: Request): Promise<unknown> {
+  if (isUrlEncodedFormPost(request)) {
+    return Object.fromEntries(new URLSearchParams(await request.text()));
+  }
+
+  return readJsonPayload(request);
+}
+
+function isUrlEncodedFormPost(request: Request): boolean {
+  return (request.headers.get("content-type") ?? "")
+    .toLowerCase()
+    .includes("application/x-www-form-urlencoded");
 }
 
 function jsonResponse(body: unknown, status: number): Response {

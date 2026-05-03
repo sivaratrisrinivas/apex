@@ -147,6 +147,20 @@ export type SignupIntakeResult =
   | { ok: true; developerSignup: DeveloperSignup; enrichmentRun?: EnrichmentRun }
   | { ok: false; status: 400; body: SignupValidationError };
 
+export interface ManualRefreshPayload {
+  normalizedCompanyDomain: unknown;
+}
+
+export interface ManualRefreshError {
+  error: string;
+}
+
+export type ManualRefreshResult =
+  | { ok: true; enrichmentRun: EnrichmentRun }
+  | { ok: false; status: 400 | 404; body: ManualRefreshError };
+
+const FRESHNESS_WINDOW_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+
 interface PrototypeStoreOptions {
   databasePath?: string;
 }
@@ -257,8 +271,29 @@ export class PrototypeStore {
         developerSignup.normalizedCompanyDomain,
         developerSignup.signedUpAt,
       );
-      enrichmentRun = this.createEnrichmentRun(developerSignup, company);
-      this.ensureLeadQueueRecord(company, developerSignup.signedUpAt, enrichmentRun.status);
+      const freshCompanyEnrichment = this.findFreshCompanyEnrichment(
+        company.id,
+        developerSignup.signedUpAt,
+      );
+
+      if (freshCompanyEnrichment) {
+        this.ensureLeadQueueRecord(
+          company,
+          developerSignup.signedUpAt,
+          freshCompanyEnrichment.status,
+        );
+        this.updateLeadScore(company.id, {
+          content: freshCompanyEnrichment.content,
+          evidenceBasis: freshCompanyEnrichment.evidenceBasis,
+        });
+      } else {
+        enrichmentRun = this.createEnrichmentRun(developerSignup, company);
+        this.ensureLeadQueueRecord(
+          company,
+          developerSignup.signedUpAt,
+          enrichmentRun.status,
+        );
+      }
     }
 
     return {
@@ -394,6 +429,60 @@ export class PrototypeStore {
       .all() as CompanyEnrichmentRow[];
 
     return rows.map(mapCompanyEnrichmentRow);
+  }
+
+  requestManualRefresh(
+    payload: unknown,
+    requestedAt = new Date().toISOString(),
+  ): ManualRefreshResult {
+    const parsedPayload = parseManualRefreshPayload(payload);
+
+    if (!parsedPayload.ok) {
+      return parsedPayload;
+    }
+
+    const company = this.findCompanyByNormalizedDomain(
+      parsedPayload.normalizedCompanyDomain,
+    );
+
+    if (!company) {
+      return {
+        ok: false,
+        status: 404,
+        body: {
+          error: "Manual refresh requires an existing Company.",
+        },
+      };
+    }
+
+    const latestDeveloperSignup = this.findLatestDeveloperSignupForCompany(
+      company.normalizedCompanyDomain,
+    );
+
+    if (!latestDeveloperSignup) {
+      return {
+        ok: false,
+        status: 404,
+        body: {
+          error: "Manual refresh requires an existing Developer Signup.",
+        },
+      };
+    }
+
+    const enrichmentRun = this.createEnrichmentRun(
+      {
+        ...latestDeveloperSignup,
+        signedUpAt: requestedAt,
+      },
+      company,
+    );
+
+    this.updateLeadEnrichmentStatus(company.id, enrichmentRun.status);
+
+    return {
+      ok: true,
+      enrichmentRun,
+    };
   }
 
   markEnrichmentRunResearching(id: string, startedAt: string): EnrichmentRun | null {
@@ -599,6 +688,49 @@ export class PrototypeStore {
     };
   }
 
+  private findCompanyByNormalizedDomain(
+    normalizedCompanyDomain: string,
+  ): Company | null {
+    const row = this.database
+      .query(
+        `
+          SELECT id, normalized_company_domain, created_at
+          FROM companies
+          WHERE normalized_company_domain = ?
+        `,
+      )
+      .get(normalizedCompanyDomain) as CompanyRow | null;
+
+    return row ? mapCompanyRow(row) : null;
+  }
+
+  private findLatestDeveloperSignupForCompany(
+    normalizedCompanyDomain: string,
+  ): DeveloperSignup | null {
+    const row = this.database
+      .query(
+        `
+          SELECT
+            id,
+            email,
+            source,
+            name,
+            signed_up_at,
+            normalized_company_domain,
+            qualification,
+            unqualified_reason
+          FROM developer_signups
+          WHERE normalized_company_domain = ?
+            AND qualification = 'qualified'
+          ORDER BY signed_up_at DESC, sequence DESC
+          LIMIT 1
+        `,
+      )
+      .get(normalizedCompanyDomain) as DeveloperSignupRow | null;
+
+    return row ? mapDeveloperSignupRow(row) : null;
+  }
+
   private createEnrichmentRun(
     developerSignup: DeveloperSignup,
     company: Company,
@@ -780,6 +912,52 @@ export class PrototypeStore {
     );
   }
 
+  private updateLeadEnrichmentStatus(
+    companyId: string,
+    enrichmentStatus: EnrichmentStatus,
+  ): void {
+    this.database.run(
+      `
+        UPDATE leads
+        SET enrichment_status = ?
+        WHERE company_id = ?
+      `,
+      [enrichmentStatus, companyId],
+    );
+  }
+
+  private findFreshCompanyEnrichment(
+    companyId: string,
+    referenceAt: string,
+  ): CompanyEnrichment | null {
+    const row = this.database
+      .query(
+        `
+          SELECT
+            id,
+            company_id,
+            enrichment_run_id,
+            normalized_company_domain,
+            status,
+            company_name,
+            content_json,
+            evidence_basis_json,
+            created_at
+          FROM company_enrichments
+          WHERE company_id = ?
+          ORDER BY sequence DESC
+          LIMIT 1
+        `,
+      )
+      .get(companyId) as CompanyEnrichmentRow | null;
+
+    if (!row || !isInsideFreshnessWindow(row.created_at, referenceAt)) {
+      return null;
+    }
+
+    return mapCompanyEnrichmentRow(row);
+  }
+
   private addColumnIfMissing(
     tableName: string,
     columnName: string,
@@ -959,6 +1137,17 @@ function maxIsoTimestamp(first: string, second: string): string {
   return first > second ? first : second;
 }
 
+function isInsideFreshnessWindow(createdAt: string, referenceAt: string): boolean {
+  const created = Date.parse(createdAt);
+  const reference = Date.parse(referenceAt);
+
+  if (Number.isNaN(created) || Number.isNaN(reference) || created > reference) {
+    return false;
+  }
+
+  return reference - created <= FRESHNESS_WINDOW_MILLISECONDS;
+}
+
 function formatCompanyName(normalizedCompanyDomain: string): string {
   const [label] = normalizedCompanyDomain.split(".");
 
@@ -981,6 +1170,62 @@ function parseDemoSignupPayload(payload: unknown): DemoSignupPayload {
     source: payload.source,
     name: payload.name,
     signedUpAt: payload.signedUpAt,
+  };
+}
+
+function parseManualRefreshPayload(payload: unknown):
+  | { ok: true; normalizedCompanyDomain: string }
+  | { ok: false; status: 400; body: ManualRefreshError } {
+  if (!isRecord(payload)) {
+    return invalidManualRefreshDomain();
+  }
+
+  const normalizedCompanyDomain = parseNormalizedCompanyDomain(
+    payload.normalizedCompanyDomain,
+  );
+
+  if (!normalizedCompanyDomain) {
+    return invalidManualRefreshDomain();
+  }
+
+  return {
+    ok: true,
+    normalizedCompanyDomain,
+  };
+}
+
+function parseNormalizedCompanyDomain(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (
+    normalized.length === 0 ||
+    /\s/.test(normalized) ||
+    !/^[a-z0-9.-]+$/.test(normalized) ||
+    normalized.startsWith(".") ||
+    normalized.endsWith(".") ||
+    !normalized.includes(".")
+  ) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function invalidManualRefreshDomain(): {
+  ok: false;
+  status: 400;
+  body: ManualRefreshError;
+} {
+  return {
+    ok: false,
+    status: 400,
+    body: {
+      error: "Manual refresh requires a valid Normalized Company Domain.",
+    },
   };
 }
 
