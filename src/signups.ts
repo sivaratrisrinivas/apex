@@ -17,8 +17,58 @@ export type EnrichmentStatus =
   | "unqualified"
   | "failed";
 
+export interface EnrichmentCitation {
+  title: string;
+  url: string;
+  excerpts: string[];
+}
+
+export interface EvidenceBasisItem {
+  field: string;
+  citations: EnrichmentCitation[];
+  reasoning: string;
+  confidence: string;
+}
+
+export interface CompanyEnrichmentContent {
+  company: {
+    name: string;
+    domain: string;
+    headquarters: string;
+    employeeRange: string;
+  };
+  funding: {
+    stage: string;
+    totalRaised: string;
+    latestRound: string;
+    latestRoundDate: string;
+  };
+  technicalSignals: {
+    aiWorkloads: string;
+    computeIntensity: string;
+    developerToolRelevance: string;
+  };
+  salesSignals: {
+    keyReasons: string[];
+    suggestedNextAction: string;
+  };
+  confidence: {
+    evidenceConfidence: string;
+    notes: string;
+  };
+  outreachSeed: {
+    personalizationAngles: string[];
+    warnings: string[];
+  };
+}
+
+export interface CompanyEnrichmentResult {
+  content: CompanyEnrichmentContent;
+  evidenceBasis: EvidenceBasisItem[];
+}
+
 export type EnrichmentRunCompletion =
-  | { status: "completed" | "partial" }
+  | { status: "completed" | "partial"; companyEnrichment?: CompanyEnrichmentResult }
   | { status: "failed"; failureReason: string };
 
 export interface DemoSignupPayload {
@@ -57,6 +107,18 @@ export interface EnrichmentRun {
   failureReason?: string;
 }
 
+export interface CompanyEnrichment {
+  id: string;
+  companyId: string;
+  enrichmentRunId: string;
+  normalizedCompanyDomain: string;
+  status: "completed" | "partial";
+  companyName: string;
+  content: CompanyEnrichmentContent;
+  evidenceBasis: EvidenceBasisItem[];
+  createdAt: string;
+}
+
 export interface LeadQueueRecord {
   id: string;
   companyId: string;
@@ -64,10 +126,13 @@ export interface LeadQueueRecord {
   normalizedCompanyDomain: string;
   enrichmentStatus: EnrichmentStatus;
   leadScore: null;
-  evidenceConfidence: "Pending";
+  evidenceConfidence: string;
   signupCount: number;
   latestSignupAt: string;
   suggestedNextAction: string;
+  keyReasons: string[];
+  evidenceBasis: EvidenceBasisItem[];
+  companyEnrichment?: CompanyEnrichment;
 }
 
 export interface SignupValidationError {
@@ -106,6 +171,13 @@ interface LeadRow {
   enrichment_status: EnrichmentStatus;
   signup_count: number;
   latest_signup_at: string;
+  company_enrichment_id: string | null;
+  enrichment_run_id: string | null;
+  company_enrichment_status: "completed" | "partial" | null;
+  enriched_company_name: string | null;
+  content_json: string | null;
+  evidence_basis_json: string | null;
+  company_enrichment_created_at: string | null;
 }
 
 interface EnrichmentRunRow {
@@ -119,6 +191,18 @@ interface EnrichmentRunRow {
   started_at: string | null;
   finished_at: string | null;
   failure_reason: string | null;
+}
+
+interface CompanyEnrichmentRow {
+  id: string;
+  company_id: string;
+  enrichment_run_id: string;
+  normalized_company_domain: string;
+  status: "completed" | "partial";
+  company_name: string;
+  content_json: string;
+  evidence_basis_json: string;
+  created_at: string;
 }
 
 export class PrototypeStore {
@@ -223,26 +307,30 @@ export class PrototypeStore {
             companies.normalized_company_domain,
             leads.enrichment_status,
             leads.signup_count,
-            leads.latest_signup_at
+            leads.latest_signup_at,
+            latest_enrichment.id AS company_enrichment_id,
+            latest_enrichment.enrichment_run_id,
+            latest_enrichment.status AS company_enrichment_status,
+            latest_enrichment.company_name AS enriched_company_name,
+            latest_enrichment.content_json,
+            latest_enrichment.evidence_basis_json,
+            latest_enrichment.created_at AS company_enrichment_created_at
           FROM leads
           JOIN companies ON companies.id = leads.company_id
+          LEFT JOIN company_enrichments AS latest_enrichment
+            ON latest_enrichment.sequence = (
+              SELECT sequence
+              FROM company_enrichments
+              WHERE company_enrichments.company_id = leads.company_id
+              ORDER BY sequence DESC
+              LIMIT 1
+            )
           ORDER BY leads.latest_signup_at DESC, leads.sequence DESC
         `,
       )
       .all() as LeadRow[];
 
-    return rows.map((row) => ({
-      id: row.id,
-      companyId: row.company_id,
-      companyName: formatCompanyName(row.normalized_company_domain),
-      normalizedCompanyDomain: row.normalized_company_domain,
-      enrichmentStatus: row.enrichment_status,
-      leadScore: null,
-      evidenceConfidence: "Pending",
-      signupCount: row.signup_count,
-      latestSignupAt: row.latest_signup_at,
-      suggestedNextAction: "Start enrichment",
-    }));
+    return rows.map(mapLeadRow);
   }
 
   listEnrichmentRuns(): EnrichmentRun[] {
@@ -273,6 +361,29 @@ export class PrototypeStore {
     const row = this.getEnrichmentRunRow(id);
 
     return row ? mapEnrichmentRunRow(row) : null;
+  }
+
+  listCompanyEnrichments(): CompanyEnrichment[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            id,
+            company_id,
+            enrichment_run_id,
+            normalized_company_domain,
+            status,
+            company_name,
+            content_json,
+            evidence_basis_json,
+            created_at
+          FROM company_enrichments
+          ORDER BY sequence DESC
+        `,
+      )
+      .all() as CompanyEnrichmentRow[];
+
+    return rows.map(mapCompanyEnrichmentRow);
   }
 
   markEnrichmentRunResearching(id: string, startedAt: string): EnrichmentRun | null {
@@ -310,7 +421,22 @@ export class PrototypeStore {
       ],
     );
 
-    return this.syncLeadStatusForEnrichmentRun(id);
+    const finishedRun = this.syncLeadStatusForEnrichmentRun(id);
+
+    if (
+      finishedRun &&
+      completion.status !== "failed" &&
+      completion.companyEnrichment
+    ) {
+      this.insertCompanyEnrichment(
+        finishedRun,
+        completion.status,
+        completion.companyEnrichment,
+        finishedAt,
+      );
+    }
+
+    return finishedRun;
   }
 
   private migrate(): void {
@@ -364,6 +490,23 @@ export class PrototypeStore {
         failure_reason TEXT,
         FOREIGN KEY (developer_signup_id) REFERENCES developer_signups(id),
         FOREIGN KEY (company_id) REFERENCES companies(id)
+      )
+    `);
+
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS company_enrichments (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        company_id TEXT NOT NULL,
+        enrichment_run_id TEXT NOT NULL UNIQUE,
+        normalized_company_domain TEXT NOT NULL,
+        status TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        evidence_basis_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (company_id) REFERENCES companies(id),
+        FOREIGN KEY (enrichment_run_id) REFERENCES enrichment_runs(id)
       )
     `);
   }
@@ -539,6 +682,45 @@ export class PrototypeStore {
     ]);
   }
 
+  private insertCompanyEnrichment(
+    enrichmentRun: EnrichmentRun,
+    status: "completed" | "partial",
+    companyEnrichment: CompanyEnrichmentResult,
+    createdAt: string,
+  ): void {
+    const result = this.database.run(
+      `
+        INSERT INTO company_enrichments (
+          company_id,
+          enrichment_run_id,
+          normalized_company_domain,
+          status,
+          company_name,
+          content_json,
+          evidence_basis_json,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        enrichmentRun.companyId,
+        enrichmentRun.id,
+        enrichmentRun.normalizedCompanyDomain,
+        status,
+        companyEnrichment.content.company.name,
+        JSON.stringify(companyEnrichment.content),
+        JSON.stringify(companyEnrichment.evidenceBasis),
+        createdAt,
+      ],
+    );
+    const id = `company_enrichment_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE company_enrichments SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+  }
+
   private getEnrichmentRunRow(id: string): EnrichmentRunRow | null {
     return this.database
       .query(
@@ -616,6 +798,48 @@ function mapCompanyRow(row: CompanyRow): Company {
   };
 }
 
+function mapLeadRow(row: LeadRow): LeadQueueRecord {
+  const companyEnrichment =
+    row.company_enrichment_id &&
+    row.enrichment_run_id &&
+    row.company_enrichment_status &&
+    row.enriched_company_name &&
+    row.content_json &&
+    row.evidence_basis_json &&
+    row.company_enrichment_created_at
+      ? mapCompanyEnrichmentRow({
+          id: row.company_enrichment_id,
+          company_id: row.company_id,
+          enrichment_run_id: row.enrichment_run_id,
+          normalized_company_domain: row.normalized_company_domain,
+          status: row.company_enrichment_status,
+          company_name: row.enriched_company_name,
+          content_json: row.content_json,
+          evidence_basis_json: row.evidence_basis_json,
+          created_at: row.company_enrichment_created_at,
+        })
+      : undefined;
+
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    companyName:
+      companyEnrichment?.companyName ?? formatCompanyName(row.normalized_company_domain),
+    normalizedCompanyDomain: row.normalized_company_domain,
+    enrichmentStatus: row.enrichment_status,
+    leadScore: null,
+    evidenceConfidence:
+      companyEnrichment?.content.confidence.evidenceConfidence ?? "Pending",
+    signupCount: row.signup_count,
+    latestSignupAt: row.latest_signup_at,
+    suggestedNextAction:
+      companyEnrichment?.content.salesSignals.suggestedNextAction ?? "Start enrichment",
+    keyReasons: companyEnrichment?.content.salesSignals.keyReasons ?? [],
+    evidenceBasis: companyEnrichment?.evidenceBasis ?? [],
+    companyEnrichment,
+  };
+}
+
 function mapEnrichmentRunRow(row: EnrichmentRunRow): EnrichmentRun {
   return {
     id: row.id,
@@ -628,6 +852,24 @@ function mapEnrichmentRunRow(row: EnrichmentRunRow): EnrichmentRun {
     finishedAt: row.finished_at ?? undefined,
     failureReason: row.failure_reason ?? undefined,
   };
+}
+
+function mapCompanyEnrichmentRow(row: CompanyEnrichmentRow): CompanyEnrichment {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    enrichmentRunId: row.enrichment_run_id,
+    normalizedCompanyDomain: row.normalized_company_domain,
+    status: row.status,
+    companyName: row.company_name,
+    content: parseJson<CompanyEnrichmentContent>(row.content_json),
+    evidenceBasis: parseJson<EvidenceBasisItem[]>(row.evidence_basis_json),
+    createdAt: row.created_at,
+  };
+}
+
+function parseJson<T>(value: string): T {
+  return JSON.parse(value) as T;
 }
 
 function maxIsoTimestamp(first: string, second: string): string {

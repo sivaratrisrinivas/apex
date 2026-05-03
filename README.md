@@ -93,9 +93,20 @@ Use `APEX_PROTOTYPE_STORE_PATH` to point a demo at a different store file:
 APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
 ```
 
+## Live Core2x Enrichment
+
+Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment:
+
+```bash
+export PARALLEL_API_KEY=...
+bun run dev
+```
+
+Without `PARALLEL_API_KEY`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
+
 Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
 
-Until the fake or live Parallel enrichment issues are implemented, the local server records runs as `researching`. The app-level enrichment worker interface already supports `completed`, `partial`, and `failed` outcomes, and the dashboard renders those states when a worker returns them.
+The local server records runs as `researching` until the configured enrichment worker finishes. The live Parallel path stores completed **Company Enrichments** and **Evidence Basis** from the Task API result; API errors produce a failed **Enrichment Status** with the visible failure reason. The app-level enrichment worker interface also supports fake workers for tests and local fixture-backed demos.
 
 ## Current Status
 
@@ -108,6 +119,8 @@ This repo currently has:
 - Company deduplication by Normalized Company Domain, while preserving every Developer Signup
 - one active Lead Queue record per Company with signup count and latest-signup urgency signals
 - asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
+- live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set
+- persisted Company Enrichments and Evidence Basis for completed live or fake worker results
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
 - automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, and Enrichment Run lifecycle behavior

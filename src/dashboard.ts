@@ -1,4 +1,9 @@
-import type { DeveloperSignup, EnrichmentRun, LeadQueueRecord } from "./signups";
+import type {
+  DeveloperSignup,
+  EnrichmentRun,
+  EvidenceBasisItem,
+  LeadQueueRecord,
+} from "./signups";
 
 interface DashboardOptions {
   developerSignups?: DeveloperSignup[];
@@ -87,9 +92,8 @@ export function renderDashboard(options: DashboardOptions = {}): string {
               <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
               <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
             </dl>
-            <p class="evidence">
-              Evidence Basis will appear after enrichment completes.
-            </p>
+            ${formatKeyReasons(selectedLead.keyReasons)}
+            ${formatEvidenceBasis(selectedLead.evidenceBasis)}
       `
     : `
             <h2>No Lead selected</h2>
@@ -378,7 +382,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         margin: 18px 0;
       }
 
-      .detail div {
+      .detail dl > div {
         display: flex;
         justify-content: space-between;
         gap: 20px;
@@ -400,6 +404,11 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         color: var(--muted);
         font-size: 13px;
         line-height: 1.5;
+      }
+
+      .evidence ul {
+        margin: 8px 0 0;
+        padding-left: 18px;
       }
 
       @media (max-width: 980px) {
@@ -538,6 +547,53 @@ function escapeHtml(value: string): string {
 
 function formatLeadScore(lead: LeadQueueRecord): string {
   return lead.leadScore === null ? "Unscored" : String(lead.leadScore);
+}
+
+function formatKeyReasons(keyReasons: string[]): string {
+  if (keyReasons.length === 0) {
+    return "";
+  }
+
+  return `
+            <div class="evidence">
+              <strong>Key reasons</strong>
+              <ul>
+                ${keyReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
+              </ul>
+            </div>
+  `;
+}
+
+function formatEvidenceBasis(evidenceBasis: EvidenceBasisItem[]): string {
+  if (evidenceBasis.length === 0) {
+    return `
+            <p class="evidence">
+              Evidence Basis will appear after enrichment completes.
+            </p>
+    `;
+  }
+
+  return `
+            <div class="evidence">
+              <strong>Evidence Basis</strong>
+              <ul>
+                ${evidenceBasis.map(formatEvidenceBasisItem).join("")}
+              </ul>
+            </div>
+  `;
+}
+
+function formatEvidenceBasisItem(item: EvidenceBasisItem): string {
+  const excerpts = item.citations.flatMap((citation) => citation.excerpts);
+  const firstExcerpt = excerpts[0];
+
+  return `
+                <li>
+                  <b>${escapeHtml(item.field)}</b>
+                  <span>${escapeHtml(item.confidence)}</span>
+                  ${firstExcerpt ? `<span>${escapeHtml(firstExcerpt)}</span>` : ""}
+                </li>
+  `;
 }
 
 function formatLatestSignup(signedUpAt: string): string {

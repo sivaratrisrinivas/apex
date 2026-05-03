@@ -1,5 +1,10 @@
 import { renderDashboard } from "./dashboard";
 import {
+  createCore2xEnrichmentWorker,
+  createParallelTaskClientFromEnv,
+  type ParallelTaskClient,
+} from "./enrichment";
+import {
   PrototypeStore,
   type EnrichmentRun,
   type EnrichmentRunCompletion,
@@ -18,12 +23,15 @@ export type EnrichmentWorker = (
 export interface CreateAppOptions {
   prototypeStorePath?: string;
   enrichmentWorker?: EnrichmentWorker;
+  parallelTaskClient?: ParallelTaskClient;
+  env?: Record<string, string | undefined>;
 }
 
 export function createApp(options: CreateAppOptions = {}): ApexApp {
   const store = new PrototypeStore({
     databasePath: options.prototypeStorePath,
   });
+  const configuredEnrichmentWorker = resolveEnrichmentWorker(options);
 
   return {
     async fetch(request: Request): Promise<Response> {
@@ -53,10 +61,13 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
 
         if (result.enrichmentRun) {
           const enrichmentRunId = result.enrichmentRun.id;
-          const enrichmentWorker = options.enrichmentWorker;
 
           queueMicrotask(() => {
-            void runEnrichmentRun(store, enrichmentRunId, enrichmentWorker);
+            void runEnrichmentRun(
+              store,
+              enrichmentRunId,
+              configuredEnrichmentWorker,
+            );
           });
         }
 
@@ -72,6 +83,30 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       return new Response("Not found", { status: 404 });
     },
   };
+}
+
+function resolveEnrichmentWorker(
+  options: CreateAppOptions,
+): EnrichmentWorker | undefined {
+  if (options.enrichmentWorker) {
+    return options.enrichmentWorker;
+  }
+
+  if (options.parallelTaskClient) {
+    return createCore2xEnrichmentWorker({
+      taskClient: options.parallelTaskClient,
+    });
+  }
+
+  const env = options.env ?? process.env;
+
+  if (!env.PARALLEL_API_KEY?.trim()) {
+    return undefined;
+  }
+
+  return createCore2xEnrichmentWorker({
+    taskClient: createParallelTaskClientFromEnv({ env }),
+  });
 }
 
 async function runEnrichmentRun(
