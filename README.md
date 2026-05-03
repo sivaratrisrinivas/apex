@@ -6,9 +6,9 @@ Apex turns developer signups into a focused sales queue.
 
 Apex is an internal prototype for spotting promising company leads from developer signup emails.
 
-For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, shows it in a sales dashboard, and prepares the app for later enrichment with company research, evidence, and lead scoring.
+For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, and fixture-backed fake enrichment for local demos. Later issues plug in scoring and outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, and evidence-aware Lead Score calculation. Later issues plug in freshness controls, richer dashboard interactions, and outreach drafts.
 
 ## Why It Exists
 
@@ -91,6 +91,20 @@ APEX_ENRICHMENT_MODE=fake bun run dev
 
 The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
 
+## Lead Scoring
+
+Completed and partial Company Enrichments produce a Lead Score from the agreed Apex dimensions:
+
+- Purchasing Capacity
+- Compute Intensity
+- Parallel Fit
+- Sales Timing
+- Evidence Confidence
+
+The Prototype Store persists the numeric Lead Score, the score breakdown, and the top score reasons on the Lead Queue record. The dashboard shows the score in the queue and exposes the breakdown in the selected Lead detail panel.
+
+Partial Enrichments can still create scored Leads when the Company identity is usable. Missing or weaker evidence lowers Evidence Confidence instead of failing the Enrichment Run. Apex also caps otherwise high-scoring Leads below the high-score threshold when the Enrichment Run does not provide an Evidence Basis, so the dashboard does not display unsupported high-priority recommendations.
+
 ## Prototype Store
 
 The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
@@ -130,9 +144,12 @@ This repo currently has:
 - live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set
 - fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
 - persisted Company Enrichments and Evidence Basis for completed live or fake worker results
+- Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence
+- persisted score breakdowns and top score reasons on Lead Queue records
+- a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, and Enrichment Run lifecycle behavior
+- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, fake enrichment, and Lead Score behavior
 - WSL-focused setup notes
 
-The next enrichment issues add scoring, freshness, dashboard detail behavior, and outreach draft generation behind the existing lifecycle.
+The next enrichment issues add freshness, dashboard detail behavior, and outreach draft generation behind the existing lifecycle.

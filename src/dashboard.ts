@@ -85,13 +85,15 @@ export function renderDashboard(options: DashboardOptions = {}): string {
   const selectedLeadDetail = selectedLead
     ? `
             <h2>${escapeHtml(selectedLead.companyName)} details</h2>
-            <div class="score score-empty">--</div>
+            ${formatLeadScoreBadge(selectedLead)}
             <dl>
               <div><dt>Normalized Company Domain</dt><dd>${escapeHtml(selectedLead.normalizedCompanyDomain)}</dd></div>
               <div><dt>Enrichment Status</dt><dd>${escapeHtml(selectedLead.enrichmentStatus)}</dd></div>
               <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
               <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
             </dl>
+            ${formatScoreBreakdown(selectedLead)}
+            ${formatScoreReasons(selectedLead.scoreReasons)}
             ${formatKeyReasons(selectedLead.keyReasons)}
             ${formatEvidenceBasis(selectedLead.evidenceBasis)}
       `
@@ -547,6 +549,64 @@ function escapeHtml(value: string): string {
 
 function formatLeadScore(lead: LeadQueueRecord): string {
   return lead.leadScore === null ? "Unscored" : String(lead.leadScore);
+}
+
+function formatLeadScoreBadge(lead: LeadQueueRecord): string {
+  if (lead.leadScore === null) {
+    return `<div class="score score-empty">--</div>`;
+  }
+
+  return `<div class="score">${lead.leadScore}</div>`;
+}
+
+function formatScoreBreakdown(lead: LeadQueueRecord): string {
+  if (!lead.scoreBreakdown) {
+    return "";
+  }
+
+  const dimensions = [
+    ["Purchasing Capacity", lead.scoreBreakdown.purchasingCapacity],
+    ["Compute Intensity", lead.scoreBreakdown.computeIntensity],
+    ["Parallel Fit", lead.scoreBreakdown.parallelFit],
+    ["Sales Timing", lead.scoreBreakdown.salesTiming],
+    ["Evidence Confidence", lead.scoreBreakdown.evidenceConfidence],
+  ] as const;
+
+  return `
+            <div class="evidence">
+              <strong>Lead Score Breakdown</strong>
+              <ul>
+                ${dimensions
+                  .map(
+                    ([label, dimension]) => `
+                <li>
+                  <b>${escapeHtml(label)}</b>
+                  <span>${dimension.score}/${dimension.maxScore}</span>
+                  <span>${escapeHtml(dimension.reason)}</span>
+                </li>
+                  `,
+                  )
+                  .join("")}
+              </ul>
+            </div>
+  `;
+}
+
+function formatScoreReasons(scoreReasons: string[]): string {
+  if (scoreReasons.length === 0) {
+    return "";
+  }
+
+  return `
+            <div class="evidence">
+              <strong>Top score reasons</strong>
+              <ul>
+                ${scoreReasons
+                  .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+                  .join("")}
+              </ul>
+            </div>
+  `;
 }
 
 function formatKeyReasons(keyReasons: string[]): string {

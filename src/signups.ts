@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 
 import { Database } from "bun:sqlite";
 
+import { scoreLead, type LeadScoreBreakdown } from "./scoring";
+
 export type SignupQualification = "qualified" | "unqualified";
 export type UnqualifiedSignupReason =
   | "personal-domain"
@@ -125,7 +127,9 @@ export interface LeadQueueRecord {
   companyName: string;
   normalizedCompanyDomain: string;
   enrichmentStatus: EnrichmentStatus;
-  leadScore: null;
+  leadScore: number | null;
+  scoreBreakdown: LeadScoreBreakdown | null;
+  scoreReasons: string[];
   evidenceConfidence: string;
   signupCount: number;
   latestSignupAt: string;
@@ -169,6 +173,9 @@ interface LeadRow {
   company_id: string;
   normalized_company_domain: string;
   enrichment_status: EnrichmentStatus;
+  lead_score: number | null;
+  score_breakdown_json: string | null;
+  score_reasons_json: string | null;
   signup_count: number;
   latest_signup_at: string;
   company_enrichment_id: string | null;
@@ -306,6 +313,9 @@ export class PrototypeStore {
             leads.company_id,
             companies.normalized_company_domain,
             leads.enrichment_status,
+            leads.lead_score,
+            leads.score_breakdown_json,
+            leads.score_reasons_json,
             leads.signup_count,
             leads.latest_signup_at,
             latest_enrichment.id AS company_enrichment_id,
@@ -434,6 +444,7 @@ export class PrototypeStore {
         completion.companyEnrichment,
         finishedAt,
       );
+      this.updateLeadScore(finishedRun.companyId, completion.companyEnrichment);
     }
 
     return finishedRun;
@@ -469,12 +480,19 @@ export class PrototypeStore {
         id TEXT UNIQUE,
         company_id TEXT NOT NULL UNIQUE,
         enrichment_status TEXT NOT NULL,
+        lead_score INTEGER,
+        score_breakdown_json TEXT,
+        score_reasons_json TEXT,
         signup_count INTEGER NOT NULL,
         latest_signup_at TEXT NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (company_id) REFERENCES companies(id)
       )
     `);
+
+    this.addColumnIfMissing("leads", "lead_score", "INTEGER");
+    this.addColumnIfMissing("leads", "score_breakdown_json", "TEXT");
+    this.addColumnIfMissing("leads", "score_reasons_json", "TEXT");
 
     this.database.run(`
       CREATE TABLE IF NOT EXISTS enrichment_runs (
@@ -721,6 +739,65 @@ export class PrototypeStore {
     ]);
   }
 
+  private updateLeadScore(
+    companyId: string,
+    companyEnrichment: CompanyEnrichmentResult,
+  ): void {
+    const lead = this.database
+      .query(
+        `
+          SELECT signup_count, latest_signup_at
+          FROM leads
+          WHERE company_id = ?
+        `,
+      )
+      .get(companyId) as { signup_count: number; latest_signup_at: string } | null;
+
+    if (!lead) {
+      return;
+    }
+
+    const leadScore = scoreLead({
+      companyEnrichment,
+      signupCount: lead.signup_count,
+      latestSignupAt: lead.latest_signup_at,
+    });
+
+    this.database.run(
+      `
+        UPDATE leads
+        SET lead_score = ?,
+            score_breakdown_json = ?,
+            score_reasons_json = ?
+        WHERE company_id = ?
+      `,
+      [
+        leadScore.total,
+        JSON.stringify(leadScore.breakdown),
+        JSON.stringify(leadScore.topReasons),
+        companyId,
+      ],
+    );
+  }
+
+  private addColumnIfMissing(
+    tableName: string,
+    columnName: string,
+    columnDefinition: string,
+  ): void {
+    const columns = this.database
+      .query(`PRAGMA table_info(${tableName})`)
+      .all() as { name: string }[];
+
+    if (columns.some((column) => column.name === columnName)) {
+      return;
+    }
+
+    this.database.run(
+      `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`,
+    );
+  }
+
   private getEnrichmentRunRow(id: string): EnrichmentRunRow | null {
     return this.database
       .query(
@@ -827,7 +904,13 @@ function mapLeadRow(row: LeadRow): LeadQueueRecord {
       companyEnrichment?.companyName ?? formatCompanyName(row.normalized_company_domain),
     normalizedCompanyDomain: row.normalized_company_domain,
     enrichmentStatus: row.enrichment_status,
-    leadScore: null,
+    leadScore: row.lead_score,
+    scoreBreakdown: row.score_breakdown_json
+      ? parseJson<LeadScoreBreakdown>(row.score_breakdown_json)
+      : null,
+    scoreReasons: row.score_reasons_json
+      ? parseJson<string[]>(row.score_reasons_json)
+      : [],
     evidenceConfidence:
       companyEnrichment?.content.confidence.evidenceConfidence ?? "Pending",
     signupCount: row.signup_count,
