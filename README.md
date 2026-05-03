@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, shows it in a sales dashboard, and prepares the app for later enrichment with company research, evidence, and lead scoring.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, and the asynchronous Enrichment Run lifecycle. Later issues plug in real or fixture-backed enrichment, scoring, and outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, and fixture-backed fake enrichment for local demos. Later issues plug in scoring and outreach drafts.
 
 ## Why It Exists
 
@@ -83,6 +83,14 @@ curl -s http://localhost:3000/demo-signups \
 
 The response includes the stored Developer Signup and, for qualified company domains, the pending Enrichment Run that was created for that Company. The dashboard then advances the run to `researching` asynchronously so signup intake stays responsive while research is still in progress.
 
+Use fixture-backed fake enrichment for a complete WSL-local demo without live Parallel credentials:
+
+```bash
+APEX_ENRICHMENT_MODE=fake bun run dev
+```
+
+The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
+
 ## Prototype Store
 
 The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
@@ -102,7 +110,7 @@ export PARALLEL_API_KEY=...
 bun run dev
 ```
 
-Without `PARALLEL_API_KEY`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
+Without `PARALLEL_API_KEY` or `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
 
 Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
 
@@ -120,10 +128,11 @@ This repo currently has:
 - one active Lead Queue record per Company with signup count and latest-signup urgency signals
 - asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
 - live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set
+- fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
 - persisted Company Enrichments and Evidence Basis for completed live or fake worker results
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
 - automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, and Enrichment Run lifecycle behavior
 - WSL-focused setup notes
 
-The next enrichment issues add fake local fixtures and the live Core2x Parallel client behind the existing lifecycle.
+The next enrichment issues add scoring, freshness, dashboard detail behavior, and outreach draft generation behind the existing lifecycle.

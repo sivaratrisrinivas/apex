@@ -249,6 +249,146 @@ export function createCore2xEnrichmentWorker(options: {
   };
 }
 
+export function createFakeParallelEnrichmentWorker(): (
+  enrichmentRun: EnrichmentRun,
+) => Promise<EnrichmentRunCompletion> {
+  return async (enrichmentRun) => {
+    const fixture = FAKE_PARALLEL_ENRICHMENT_FIXTURES[
+      enrichmentRun.normalizedCompanyDomain
+    ];
+
+    if (!fixture) {
+      return {
+        status: "failed",
+        failureReason: `No fake Parallel enrichment fixture exists for ${enrichmentRun.normalizedCompanyDomain}.`,
+      };
+    }
+
+    return structuredClone(fixture);
+  };
+}
+
+const FAKE_PARALLEL_ENRICHMENT_FIXTURES: Record<
+  string,
+  EnrichmentRunCompletion
+> = {
+  "modal.com": {
+    status: "completed",
+    companyEnrichment: {
+      content: {
+        company: {
+          name: "Modal Labs",
+          domain: "modal.com",
+          headquarters: "New York, NY",
+          employeeRange: "51-200 employees",
+        },
+        funding: {
+          stage: "Series B",
+          totalRaised: "$23M",
+          latestRound: "Series B",
+          latestRoundDate: "2025-04-15",
+        },
+        technicalSignals: {
+          aiWorkloads: "Serverless infrastructure for AI workloads.",
+          computeIntensity: "High",
+          developerToolRelevance: "Strong developer platform signal.",
+        },
+        salesSignals: {
+          keyReasons: ["AI infrastructure workload", "Recent funding"],
+          suggestedNextAction: "Review infrastructure workload signal.",
+        },
+        confidence: {
+          evidenceConfidence: "High",
+          notes: "Funding and technical signals are supported by citations.",
+        },
+        outreachSeed: {
+          personalizationAngles: ["AI infrastructure scaling"],
+          warnings: [],
+        },
+      },
+      evidenceBasis: [
+        {
+          field: "technicalSignals.computeIntensity",
+          confidence: "high",
+          reasoning: "Modal describes serverless compute for AI workloads.",
+          citations: [
+            {
+              title: "Modal infrastructure overview",
+              url: "https://modal.com",
+              excerpts: ["Serverless infrastructure for AI workloads."],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  "runpod.io": {
+    status: "partial",
+    companyEnrichment: {
+      content: {
+        company: {
+          name: "RunPod",
+          domain: "runpod.io",
+          headquarters: "Unknown",
+          employeeRange: "51-200 employees",
+        },
+        funding: {
+          stage: "Unknown",
+          totalRaised: "Unknown",
+          latestRound: "Unknown",
+          latestRoundDate: "Unknown",
+        },
+        technicalSignals: {
+          aiWorkloads: "GPU cloud infrastructure for AI workloads.",
+          computeIntensity: "High",
+          developerToolRelevance:
+            "Developer-facing GPU infrastructure is relevant to Parallel-style automation teams.",
+        },
+        salesSignals: {
+          keyReasons: ["GPU infrastructure workload", "Developer platform signal"],
+          suggestedNextAction: "Verify current funding before outreach.",
+        },
+        confidence: {
+          evidenceConfidence: "Medium",
+          notes: "Technical signals are usable, but funding details are incomplete.",
+        },
+        outreachSeed: {
+          personalizationAngles: ["GPU infrastructure for AI teams"],
+          warnings: ["Funding details are incomplete."],
+        },
+      },
+      evidenceBasis: [
+        {
+          field: "technicalSignals.computeIntensity",
+          confidence: "medium",
+          reasoning:
+            "RunPod presents itself as cloud infrastructure for GPU-heavy AI workloads.",
+          citations: [
+            {
+              title: "RunPod platform overview",
+              url: "https://runpod.io",
+              excerpts: ["GPU cloud infrastructure for AI workloads."],
+            },
+          ],
+        },
+        {
+          field: "funding.stage",
+          confidence: "low",
+          reasoning:
+            "The fake fixture intentionally leaves funding unresolved to exercise Partial Enrichment.",
+          citations: [
+            {
+              title: "Fake fixture caveat",
+              url: "https://runpod.io",
+              excerpts: ["Funding details are incomplete."],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
+
 class HttpParallelTaskClient implements ParallelTaskClient {
   private apiKey: string;
   private baseUrl: string;

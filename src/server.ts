@@ -1,6 +1,7 @@
 import { renderDashboard } from "./dashboard";
 import {
   createCore2xEnrichmentWorker,
+  createFakeParallelEnrichmentWorker,
   createParallelTaskClientFromEnv,
   type ParallelTaskClient,
 } from "./enrichment";
@@ -99,6 +100,10 @@ function resolveEnrichmentWorker(
   }
 
   const env = options.env ?? process.env;
+
+  if (env.APEX_ENRICHMENT_MODE?.trim().toLowerCase() === "fake") {
+    return createFakeParallelEnrichmentWorker();
+  }
 
   if (!env.PARALLEL_API_KEY?.trim()) {
     return undefined;
