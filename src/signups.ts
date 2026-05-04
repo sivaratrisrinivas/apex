@@ -139,6 +139,8 @@ export interface LeadQueueRecord {
   companyEnrichment?: CompanyEnrichment;
 }
 
+export type LeadQueueSort = "score" | "recent";
+
 export interface SignupValidationError {
   error: string;
 }
@@ -339,7 +341,21 @@ export class PrototypeStore {
     return rows.map(mapCompanyRow);
   }
 
-  listLeadQueue(): LeadQueueRecord[] {
+  listLeadQueue(sort: LeadQueueSort = "score"): LeadQueueRecord[] {
+    const orderBy =
+      sort === "recent"
+        ? `
+            leads.latest_signup_at DESC,
+            leads.lead_score IS NULL,
+            leads.lead_score DESC,
+            leads.sequence DESC
+          `
+        : `
+            leads.lead_score IS NULL,
+            leads.lead_score DESC,
+            leads.latest_signup_at DESC,
+            leads.sequence DESC
+          `;
     const rows = this.database
       .query(
         `
@@ -370,7 +386,7 @@ export class PrototypeStore {
               ORDER BY sequence DESC
               LIMIT 1
             )
-          ORDER BY leads.latest_signup_at DESC, leads.sequence DESC
+          ORDER BY ${orderBy}
         `,
       )
       .all() as LeadRow[];

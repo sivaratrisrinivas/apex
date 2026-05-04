@@ -9,6 +9,7 @@ import {
   PrototypeStore,
   type EnrichmentRun,
   type EnrichmentRunCompletion,
+  type LeadQueueSort,
 } from "./signups";
 
 export type { EnrichmentRunCompletion } from "./signups";
@@ -39,11 +40,16 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       const url = new URL(request.url);
 
       if (url.pathname === "/" && request.method === "GET") {
+        const selectedLeadDomain = url.searchParams.get("lead")?.trim() || undefined;
+        const leadQueueSort = parseLeadQueueSort(url.searchParams.get("sort"));
+
         return new Response(
           renderDashboard({
             developerSignups: store.listDeveloperSignups(),
             enrichmentRuns: store.listEnrichmentRuns(),
-            leadQueue: store.listLeadQueue(),
+            leadQueue: store.listLeadQueue(leadQueueSort),
+            selectedLeadDomain,
+            leadQueueSort,
           }),
           {
             headers: {
@@ -121,6 +127,10 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       return new Response("Not found", { status: 404 });
     },
   };
+}
+
+function parseLeadQueueSort(value: string | null): LeadQueueSort {
+  return value === "recent" ? "recent" : "score";
 }
 
 function resolveEnrichmentWorker(

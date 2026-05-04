@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard shell, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, and seven-day Freshness Window controls with manual refresh. Later issues plug in richer dashboard interactions and outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, and raw structured enrichment inspection. Later issues plug in outreach drafts.
 
 ## Why It Exists
 
@@ -123,6 +123,14 @@ The Prototype Store persists the numeric Lead Score, the score breakdown, and th
 
 Partial Enrichments can still create scored Leads when the Company identity is usable. Missing or weaker evidence lowers Evidence Confidence instead of failing the Enrichment Run. Apex also caps otherwise high-scoring Leads below the high-score threshold when the Enrichment Run does not provide an Evidence Basis, so the dashboard does not display unsupported high-priority recommendations.
 
+## Lead Queue Dashboard
+
+The Apex Dashboard opens directly on the Lead Queue rather than a landing page. Queue rows show the Company, Lead Score, Enrichment Status, key reasons, Evidence Confidence, signup count, latest signup, and Suggested Next Action so sales users can scan for immediate follow-up.
+
+By default, the Lead Queue prioritizes higher Lead Scores and uses recent signup activity as the tie-breaker. Use the dashboard sort controls, or open `/?sort=recent`, to prioritize recent Developer Signup activity first. Use `/?sort=score` to return to score-first priority.
+
+Selecting a Company from the queue opens that Lead in the detail panel with the score breakdown, top score reasons, Evidence Basis, and raw structured Company Enrichment. The detail panel also includes compact Mock CRM Fields such as Lifecycle Stage, Owner, Territory, and Last Activity so the prototype feels realistic without integrating Salesforce, HubSpot, or another CRM.
+
 ## Prototype Store
 
 The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
@@ -170,9 +178,11 @@ This repo currently has:
 - Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence
 - persisted score breakdowns and top score reasons on Lead Queue records
 - a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
+- score-first and recent-signup Lead Queue sorting
+- selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, and raw structured Company Enrichment
 - visible `unqualified` status for Unqualified Signups without starting research
-- a styled dashboard shell with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, and Lead Score behavior
+- a styled dashboard with a lead queue, selected lead detail panel, and visible signup intake history
+- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, and Lead Score behavior
 - WSL-focused setup notes
 
-The next enrichment issues add richer dashboard detail behavior and outreach draft generation behind the existing lifecycle.
+The next enrichment issue adds outreach draft generation behind the existing lifecycle.

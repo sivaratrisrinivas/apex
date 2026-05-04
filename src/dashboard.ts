@@ -3,26 +3,39 @@ import type {
   EnrichmentRun,
   EvidenceBasisItem,
   LeadQueueRecord,
+  LeadQueueSort,
 } from "./signups";
 
 interface DashboardOptions {
   developerSignups?: DeveloperSignup[];
   enrichmentRuns?: EnrichmentRun[];
   leadQueue?: LeadQueueRecord[];
+  selectedLeadDomain?: string;
+  leadQueueSort?: LeadQueueSort;
 }
 
 export function renderDashboard(options: DashboardOptions = {}): string {
   const leadQueue = options.leadQueue ?? [];
+  const leadQueueSort = options.leadQueueSort ?? "score";
+  const selectedLead =
+    leadQueue.find(
+      (lead) =>
+        lead.normalizedCompanyDomain ===
+        options.selectedLeadDomain?.trim().toLowerCase(),
+    ) ?? leadQueue[0];
   const rows = leadQueue
     .map(
       (row) => `
         <tr>
           <td>
-            <strong>${escapeHtml(row.companyName)}</strong>
+            <a class="lead-link" href="/?lead=${encodeURIComponent(row.normalizedCompanyDomain)}&sort=${leadQueueSort}">
+              <strong>${escapeHtml(row.companyName)}</strong>
+            </a>
             <span>${escapeHtml(row.normalizedCompanyDomain)}</span>
           </td>
           <td><b>${formatLeadScore(row)}</b></td>
           <td><mark data-status="${escapeHtml(row.enrichmentStatus)}">${escapeHtml(row.enrichmentStatus)}</mark></td>
+          <td>${formatInlineList(row.keyReasons)}</td>
           <td>${escapeHtml(row.evidenceConfidence)}</td>
           <td>${row.signupCount}<span>${escapeHtml(formatLatestSignup(row.latestSignupAt))}</span></td>
           <td>${escapeHtml(row.suggestedNextAction)}</td>
@@ -34,7 +47,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
     rows ||
     `
       <tr>
-        <td colspan="6">No Leads yet.</td>
+        <td colspan="7">No Leads yet.</td>
       </tr>
     `;
   const developerSignupRows = (options.developerSignups ?? [])
@@ -81,7 +94,6 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         <td colspan="4">No Enrichment Runs yet.</td>
       </tr>
     `;
-  const selectedLead = leadQueue[0];
   const selectedLeadDetail = selectedLead
     ? `
             <h2>${escapeHtml(selectedLead.companyName)} details</h2>
@@ -92,11 +104,13 @@ export function renderDashboard(options: DashboardOptions = {}): string {
               <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
               <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
             </dl>
+            ${formatMockCrmFields(selectedLead)}
             ${formatManualRefreshAction(selectedLead)}
             ${formatScoreBreakdown(selectedLead)}
             ${formatScoreReasons(selectedLead.scoreReasons)}
             ${formatKeyReasons(selectedLead.keyReasons)}
             ${formatEvidenceBasis(selectedLead.evidenceBasis)}
+            ${formatRawCompanyEnrichment(selectedLead)}
       `
     : `
             <h2>No Lead selected</h2>
@@ -289,6 +303,53 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         border-collapse: collapse;
       }
 
+      .table-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px 18px 0;
+      }
+
+      .table-toolbar h2 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+
+      .sort-controls {
+        display: inline-flex;
+        gap: 6px;
+      }
+
+      .sort-controls a {
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 9px;
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .sort-controls a[aria-current="true"] {
+        color: #075f73;
+        background: #eaf7fb;
+        border-color: #bce8f2;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
       caption {
         padding: 16px 18px 4px;
         text-align: left;
@@ -316,6 +377,16 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         color: var(--muted);
         font-size: 12px;
         margin-top: 3px;
+      }
+
+      .lead-link {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .lead-link:hover {
+        color: #075f73;
+        text-decoration: underline;
       }
 
       mark {
@@ -423,6 +494,17 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         padding-left: 18px;
       }
 
+      .evidence pre {
+        overflow: auto;
+        margin: 10px 0 0;
+        padding: 10px;
+        border-radius: 8px;
+        background: #111827;
+        color: #f9fbfe;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
       @media (max-width: 980px) {
         .shell {
           grid-template-columns: 1fr;
@@ -487,13 +569,18 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         <div class="grid">
           <div class="queue-column">
             <section class="panel" aria-label="Lead Queue">
+              <div class="table-toolbar">
+                <h2>Lead Queue</h2>
+                ${formatLeadQueueSortControls(leadQueueSort)}
+              </div>
               <table>
-                <caption>Lead Queue</caption>
+                <caption class="sr-only">Lead Queue</caption>
                 <thead>
                   <tr>
                     <th>Company</th>
                     <th>Score</th>
                     <th>Status</th>
+                    <th>Key Reasons</th>
                     <th>Confidence</th>
                     <th>Signups</th>
                     <th>Suggested Next Action</th>
@@ -549,6 +636,15 @@ function formatSignupQualification(signup: DeveloperSignup): string {
   return `Unqualified Signup: <mark data-status="unqualified">unqualified</mark><span>${escapeHtml(signup.unqualifiedReason ?? "unqualified")}</span>`;
 }
 
+function formatLeadQueueSortControls(activeSort: LeadQueueSort): string {
+  return `
+                <div class="sort-controls" aria-label="Lead Queue sort">
+                  <a href="/?sort=score" aria-current="${activeSort === "score"}">Lead Score</a>
+                  <a href="/?sort=recent" aria-current="${activeSort === "recent"}">Recent Signup</a>
+                </div>
+  `;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -569,6 +665,16 @@ function formatLeadScoreBadge(lead: LeadQueueRecord): string {
   return `<div class="score">${lead.leadScore}</div>`;
 }
 
+function formatInlineList(items: string[]): string {
+  if (items.length === 0) {
+    return "None yet";
+  }
+
+  return items
+    .map((item) => `<span class="reason">${escapeHtml(item)}</span>`)
+    .join("");
+}
+
 function formatManualRefreshAction(lead: LeadQueueRecord): string {
   return `
             <form class="refresh-action" method="post" action="/manual-refreshes">
@@ -576,6 +682,69 @@ function formatManualRefreshAction(lead: LeadQueueRecord): string {
               <button type="submit">Manual refresh</button>
             </form>
   `;
+}
+
+function formatMockCrmFields(lead: LeadQueueRecord): string {
+  const fields = [
+    ["Lifecycle Stage", formatMockLifecycleStage(lead)],
+    ["Owner", formatMockOwner(lead)],
+    ["Territory", formatMockTerritory(lead.normalizedCompanyDomain)],
+    [
+      "Last Activity",
+      `${lead.signupCount} Developer Signup${
+        lead.signupCount === 1 ? "" : "s"
+      } - ${formatLatestSignup(lead.latestSignupAt)}`,
+    ],
+  ] as const;
+
+  return `
+            <div class="evidence">
+              <strong>Mock CRM Fields</strong>
+              <dl>
+                ${fields
+                  .map(
+                    ([label, value]) => `
+                <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>
+                    `,
+                  )
+                  .join("")}
+              </dl>
+            </div>
+  `;
+}
+
+function formatMockLifecycleStage(lead: LeadQueueRecord): string {
+  if (lead.leadScore === null) {
+    return lead.enrichmentStatus === "failed" ? "Research blocked" : "Researching";
+  }
+
+  if (lead.leadScore >= 80) {
+    return "Sales Qualified Lead";
+  }
+
+  if (lead.leadScore >= 60) {
+    return "Qualified nurture";
+  }
+
+  return "Monitor";
+}
+
+function formatMockOwner(lead: LeadQueueRecord): string {
+  return lead.leadScore !== null && lead.leadScore >= 80
+    ? "Enterprise AE"
+    : "GTM Research";
+}
+
+function formatMockTerritory(normalizedCompanyDomain: string): string {
+  if (normalizedCompanyDomain.endsWith(".ai")) {
+    return "AI startups";
+  }
+
+  if (normalizedCompanyDomain.endsWith(".io")) {
+    return "Developer infrastructure";
+  }
+
+  return "North America";
 }
 
 function formatScoreBreakdown(lead: LeadQueueRecord): string {
@@ -673,6 +842,30 @@ function formatEvidenceBasisItem(item: EvidenceBasisItem): string {
                   ${firstExcerpt ? `<span>${escapeHtml(firstExcerpt)}</span>` : ""}
                 </li>
   `;
+}
+
+function formatRawCompanyEnrichment(lead: LeadQueueRecord): string {
+  if (!lead.companyEnrichment) {
+    return `
+            <p class="evidence">
+              Raw Company Enrichment will appear after enrichment completes.
+            </p>
+    `;
+  }
+
+  return `
+            <div class="evidence">
+              <strong>Raw Company Enrichment</strong>
+              <pre>${escapeHtmlText(JSON.stringify(lead.companyEnrichment.content, null, 2))}</pre>
+            </div>
+  `;
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function formatLatestSignup(signedUpAt: string): string {
