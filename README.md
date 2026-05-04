@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, raw structured enrichment inspection, and evidence-backed Outreach Draft generation.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, raw structured enrichment inspection, evidence-backed Outreach Draft generation, and a scripted WSL demo verifier for the full Apex story.
 
 ## Why It Exists
 
@@ -59,6 +59,12 @@ Run tests:
 bun test
 ```
 
+Run the full WSL demo verification:
+
+```bash
+bun run demo:wsl
+```
+
 Start the dashboard:
 
 ```bash
@@ -88,6 +94,14 @@ Use fixture-backed fake enrichment for a complete WSL-local demo without live Pa
 ```bash
 APEX_ENRICHMENT_MODE=fake bun run dev
 ```
+
+For a scripted end-to-end demo that does not require opening a browser or using any Windows-specific commands, run:
+
+```bash
+bun run demo:wsl
+```
+
+The script uses fake enrichment to submit `engineer@modal.com`, observe the acknowledged pending **Enrichment Run**, verify the completed **Lead Queue** entry and **Evidence Basis**, generate an evidence-backed **Outreach Draft**, and print a short success transcript.
 
 The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
 
@@ -170,6 +184,8 @@ bun run dev
 
 Without `PARALLEL_API_KEY` or `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
 
+Use `APEX_ENRICHMENT_MODE=fake` or `bun run demo:wsl` when you need deterministic WSL-local demos with no live API dependency. Use live Parallel credentials when you want to verify real **Core2x Enrichment** behavior against the Parallel Task API.
+
 Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
 
 Fresh Company Enrichments are reused inside the seven-day Freshness Window. Stale enrichments and manual refresh requests create new Enrichment Runs for the same Company without duplicating the active Lead.
@@ -198,10 +214,11 @@ This repo currently has:
 - persisted score breakdowns and top score reasons on Lead Queue records
 - a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
 - evidence-backed Outreach Draft generation that stays independent from Lead Score
+- WSL demo verification via `bun run demo:wsl`
 - weak-evidence Outreach Draft fallback that avoids fake personalization
 - score-first and recent-signup Lead Queue sorting
 - selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, editable/copyable Outreach Drafts, and raw structured Company Enrichment
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, Lead Score behavior, and Outreach Draft behavior
+- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, Lead Score behavior, Outreach Draft behavior, and the WSL demo script
 - WSL-focused setup notes

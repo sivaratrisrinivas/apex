@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/server.ts",
+    "demo:wsl": "bun scripts/demo-wsl.ts",
     "start": "bun src/server.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
