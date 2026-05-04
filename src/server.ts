@@ -87,6 +87,33 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         );
       }
 
+      if (url.pathname === "/outreach-drafts" && request.method === "POST") {
+        const isFormPost = isUrlEncodedFormPost(request);
+        const result = store.generateOutreachDraft(
+          await readStructuredPayload(request),
+        );
+
+        if (!result.ok) {
+          return jsonResponse(result.body, result.status);
+        }
+
+        if (isFormPost) {
+          return new Response(null, {
+            status: 303,
+            headers: {
+              location: `/?lead=${encodeURIComponent(result.outreachDraft.normalizedCompanyDomain)}`,
+            },
+          });
+        }
+
+        return jsonResponse(
+          {
+            outreachDraft: result.outreachDraft,
+          },
+          201,
+        );
+      }
+
       if (url.pathname === "/manual-refreshes" && request.method === "POST") {
         const isFormPost = isUrlEncodedFormPost(request);
         const result = store.requestManualRefresh(

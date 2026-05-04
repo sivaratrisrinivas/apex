@@ -109,6 +109,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
             ${formatScoreBreakdown(selectedLead)}
             ${formatScoreReasons(selectedLead.scoreReasons)}
             ${formatKeyReasons(selectedLead.keyReasons)}
+            ${formatOutreachDraft(selectedLead)}
             ${formatEvidenceBasis(selectedLead.evidenceBasis)}
             ${formatRawCompanyEnrichment(selectedLead)}
       `
@@ -505,6 +506,37 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         line-height: 1.45;
       }
 
+      .outreach-draft {
+        display: grid;
+        gap: 10px;
+      }
+
+      .outreach-draft label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .outreach-draft textarea {
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        color: var(--ink);
+        background: white;
+        font: inherit;
+        line-height: 1.5;
+      }
+
+      .draft-actions {
+        display: flex;
+        gap: 8px;
+      }
+
       @media (max-width: 980px) {
         .shell {
           grid-template-columns: 1fr;
@@ -624,6 +656,16 @@ ${selectedLeadDetail}
         </div>
       </main>
     </div>
+    <script>
+      document.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-copy-outreach]");
+        if (!button) return;
+        const target = document.getElementById(button.getAttribute("data-copy-outreach"));
+        if (target && "value" in target && navigator.clipboard) {
+          await navigator.clipboard.writeText(target.value);
+        }
+      });
+    </script>
   </body>
 </html>`;
 }
@@ -809,6 +851,56 @@ function formatKeyReasons(keyReasons: string[]): string {
                 ${keyReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
               </ul>
             </div>
+  `;
+}
+
+function formatOutreachDraft(lead: LeadQueueRecord): string {
+  if (!lead.companyEnrichment) {
+    return "";
+  }
+
+  if (!lead.outreachDraft) {
+    return `
+            <form class="refresh-action" method="post" action="/outreach-drafts">
+              <input type="hidden" name="normalizedCompanyDomain" value="${escapeHtml(lead.normalizedCompanyDomain)}" />
+              <button type="submit">Generate Outreach Draft</button>
+            </form>
+    `;
+  }
+
+  const textareaId = `outreach-draft-${lead.outreachDraft.id}`;
+
+  return `
+            <div class="evidence outreach-draft">
+              <strong>Outreach Draft</strong>
+              <span>${escapeHtml(lead.outreachDraft.status)}</span>
+              <label>
+                Subject
+                <input aria-label="Outreach Draft subject" value="${escapeHtml(lead.outreachDraft.subject)}" />
+              </label>
+              <label>
+                Body
+                <textarea id="${escapeHtml(textareaId)}" aria-label="Outreach Draft body">${escapeHtmlText(lead.outreachDraft.body)}</textarea>
+              </label>
+              <div class="draft-actions">
+                <button type="button" data-copy-outreach="${escapeHtml(textareaId)}">Copy draft</button>
+              </div>
+              ${formatOutreachDraftEvidenceReferences(lead.outreachDraft.evidenceReferences)}
+            </div>
+  `;
+}
+
+function formatOutreachDraftEvidenceReferences(evidenceReferences: string[]): string {
+  if (evidenceReferences.length === 0) {
+    return "";
+  }
+
+  return `
+              <ul>
+                ${evidenceReferences
+                  .map((reference) => `<li>${escapeHtml(reference)}</li>`)
+                  .join("")}
+              </ul>
   `;
 }
 

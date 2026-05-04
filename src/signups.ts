@@ -121,6 +121,22 @@ export interface CompanyEnrichment {
   createdAt: string;
 }
 
+export type OutreachDraftStatus = "ready" | "needs-evidence";
+
+export interface OutreachDraft {
+  id: string;
+  leadId: string;
+  companyId: string;
+  normalizedCompanyDomain: string;
+  companyName: string;
+  status: OutreachDraftStatus;
+  subject: string;
+  body: string;
+  evidenceReferences: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LeadQueueRecord {
   id: string;
   companyId: string;
@@ -137,6 +153,7 @@ export interface LeadQueueRecord {
   keyReasons: string[];
   evidenceBasis: EvidenceBasisItem[];
   companyEnrichment?: CompanyEnrichment;
+  outreachDraft?: OutreachDraft;
 }
 
 export type LeadQueueSort = "score" | "recent";
@@ -160,6 +177,18 @@ export interface ManualRefreshError {
 export type ManualRefreshResult =
   | { ok: true; enrichmentRun: EnrichmentRun }
   | { ok: false; status: 400 | 404; body: ManualRefreshError };
+
+export interface OutreachDraftPayload {
+  normalizedCompanyDomain: unknown;
+}
+
+export interface OutreachDraftError {
+  error: string;
+}
+
+export type OutreachDraftGenerationResult =
+  | { ok: true; outreachDraft: OutreachDraft }
+  | { ok: false; status: 400 | 404 | 409; body: OutreachDraftError };
 
 const FRESHNESS_WINDOW_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 
@@ -201,6 +230,15 @@ interface LeadRow {
   content_json: string | null;
   evidence_basis_json: string | null;
   company_enrichment_created_at: string | null;
+  outreach_draft_id: string | null;
+  outreach_draft_lead_id: string | null;
+  outreach_draft_company_name: string | null;
+  outreach_draft_status: OutreachDraftStatus | null;
+  outreach_draft_subject: string | null;
+  outreach_draft_body: string | null;
+  outreach_draft_evidence_references_json: string | null;
+  outreach_draft_created_at: string | null;
+  outreach_draft_updated_at: string | null;
 }
 
 interface EnrichmentRunRow {
@@ -226,6 +264,20 @@ interface CompanyEnrichmentRow {
   content_json: string;
   evidence_basis_json: string;
   created_at: string;
+}
+
+interface OutreachDraftRow {
+  id: string;
+  lead_id: string;
+  company_id: string;
+  normalized_company_domain: string;
+  company_name: string;
+  status: OutreachDraftStatus;
+  subject: string;
+  body: string;
+  evidence_references_json: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export class PrototypeStore {
@@ -375,7 +427,16 @@ export class PrototypeStore {
             latest_enrichment.company_name AS enriched_company_name,
             latest_enrichment.content_json,
             latest_enrichment.evidence_basis_json,
-            latest_enrichment.created_at AS company_enrichment_created_at
+            latest_enrichment.created_at AS company_enrichment_created_at,
+            latest_outreach.id AS outreach_draft_id,
+            latest_outreach.lead_id AS outreach_draft_lead_id,
+            latest_outreach.company_name AS outreach_draft_company_name,
+            latest_outreach.status AS outreach_draft_status,
+            latest_outreach.subject AS outreach_draft_subject,
+            latest_outreach.body AS outreach_draft_body,
+            latest_outreach.evidence_references_json AS outreach_draft_evidence_references_json,
+            latest_outreach.created_at AS outreach_draft_created_at,
+            latest_outreach.updated_at AS outreach_draft_updated_at
           FROM leads
           JOIN companies ON companies.id = leads.company_id
           LEFT JOIN company_enrichments AS latest_enrichment
@@ -383,6 +444,14 @@ export class PrototypeStore {
               SELECT sequence
               FROM company_enrichments
               WHERE company_enrichments.company_id = leads.company_id
+              ORDER BY sequence DESC
+              LIMIT 1
+            )
+          LEFT JOIN outreach_drafts AS latest_outreach
+            ON latest_outreach.sequence = (
+              SELECT sequence
+              FROM outreach_drafts
+              WHERE outreach_drafts.lead_id = leads.id
               ORDER BY sequence DESC
               LIMIT 1
             )
@@ -498,6 +567,53 @@ export class PrototypeStore {
     return {
       ok: true,
       enrichmentRun,
+    };
+  }
+
+  generateOutreachDraft(
+    payload: unknown,
+    generatedAt = new Date().toISOString(),
+  ): OutreachDraftGenerationResult {
+    const parsedPayload = parseOutreachDraftPayload(payload);
+
+    if (!parsedPayload.ok) {
+      return parsedPayload;
+    }
+
+    const lead = this.listLeadQueue().find(
+      (candidate) =>
+        candidate.normalizedCompanyDomain ===
+        parsedPayload.normalizedCompanyDomain,
+    );
+
+    if (!lead) {
+      return {
+        ok: false,
+        status: 404,
+        body: {
+          error: "Outreach Draft generation requires an existing Lead.",
+        },
+      };
+    }
+
+    if (!lead.companyEnrichment) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error:
+            "Outreach Draft generation requires a completed or partial Company Enrichment.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      outreachDraft: this.insertOutreachDraft(
+        lead,
+        buildOutreachDraftContent(lead.companyEnrichment),
+        generatedAt,
+      ),
     };
   }
 
@@ -630,6 +746,25 @@ export class PrototypeStore {
         created_at TEXT NOT NULL,
         FOREIGN KEY (company_id) REFERENCES companies(id),
         FOREIGN KEY (enrichment_run_id) REFERENCES enrichment_runs(id)
+      )
+    `);
+
+    this.database.run(`
+      CREATE TABLE IF NOT EXISTS outreach_drafts (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE,
+        lead_id TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        normalized_company_domain TEXT NOT NULL,
+        company_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        evidence_references_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (lead_id) REFERENCES leads(id),
+        FOREIGN KEY (company_id) REFERENCES companies(id)
       )
     `);
   }
@@ -887,6 +1022,71 @@ export class PrototypeStore {
     ]);
   }
 
+  private insertOutreachDraft(
+    lead: LeadQueueRecord,
+    draftContent: Omit<
+      OutreachDraft,
+      | "id"
+      | "leadId"
+      | "companyId"
+      | "normalizedCompanyDomain"
+      | "companyName"
+      | "createdAt"
+      | "updatedAt"
+    >,
+    generatedAt: string,
+  ): OutreachDraft {
+    const result = this.database.run(
+      `
+        INSERT INTO outreach_drafts (
+          lead_id,
+          company_id,
+          normalized_company_domain,
+          company_name,
+          status,
+          subject,
+          body,
+          evidence_references_json,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        lead.id,
+        lead.companyId,
+        lead.normalizedCompanyDomain,
+        lead.companyName,
+        draftContent.status,
+        draftContent.subject,
+        draftContent.body,
+        JSON.stringify(draftContent.evidenceReferences),
+        generatedAt,
+        generatedAt,
+      ],
+    );
+    const id = `outreach_draft_${result.lastInsertRowid}`;
+
+    this.database.run("UPDATE outreach_drafts SET id = ? WHERE sequence = ?", [
+      id,
+      result.lastInsertRowid,
+    ]);
+
+    return {
+      id,
+      leadId: lead.id,
+      companyId: lead.companyId,
+      normalizedCompanyDomain: lead.normalizedCompanyDomain,
+      companyName: lead.companyName,
+      status: draftContent.status,
+      subject: draftContent.subject,
+      body: draftContent.body,
+      evidenceReferences: draftContent.evidenceReferences,
+      createdAt: generatedAt,
+      updatedAt: generatedAt,
+    };
+  }
+
   private updateLeadScore(
     companyId: string,
     companyEnrichment: CompanyEnrichmentResult,
@@ -1090,6 +1290,30 @@ function mapLeadRow(row: LeadRow): LeadQueueRecord {
           created_at: row.company_enrichment_created_at,
         })
       : undefined;
+  const outreachDraft =
+    row.outreach_draft_id &&
+    row.outreach_draft_lead_id &&
+    row.outreach_draft_company_name &&
+    row.outreach_draft_status &&
+    row.outreach_draft_subject &&
+    row.outreach_draft_body &&
+    row.outreach_draft_evidence_references_json &&
+    row.outreach_draft_created_at &&
+    row.outreach_draft_updated_at
+      ? mapOutreachDraftRow({
+          id: row.outreach_draft_id,
+          lead_id: row.outreach_draft_lead_id,
+          company_id: row.company_id,
+          normalized_company_domain: row.normalized_company_domain,
+          company_name: row.outreach_draft_company_name,
+          status: row.outreach_draft_status,
+          subject: row.outreach_draft_subject,
+          body: row.outreach_draft_body,
+          evidence_references_json: row.outreach_draft_evidence_references_json,
+          created_at: row.outreach_draft_created_at,
+          updated_at: row.outreach_draft_updated_at,
+        })
+      : undefined;
 
   return {
     id: row.id,
@@ -1114,6 +1338,7 @@ function mapLeadRow(row: LeadRow): LeadQueueRecord {
     keyReasons: companyEnrichment?.content.salesSignals.keyReasons ?? [],
     evidenceBasis: companyEnrichment?.evidenceBasis ?? [],
     companyEnrichment,
+    outreachDraft,
   };
 }
 
@@ -1142,6 +1367,22 @@ function mapCompanyEnrichmentRow(row: CompanyEnrichmentRow): CompanyEnrichment {
     content: parseJson<CompanyEnrichmentContent>(row.content_json),
     evidenceBasis: parseJson<EvidenceBasisItem[]>(row.evidence_basis_json),
     createdAt: row.created_at,
+  };
+}
+
+function mapOutreachDraftRow(row: OutreachDraftRow): OutreachDraft {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    companyId: row.company_id,
+    normalizedCompanyDomain: row.normalized_company_domain,
+    companyName: row.company_name,
+    status: row.status,
+    subject: row.subject,
+    body: row.body,
+    evidenceReferences: parseJson<string[]>(row.evidence_references_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -1174,6 +1415,84 @@ function formatCompanyName(normalizedCompanyDomain: string): string {
     .join(" ");
 }
 
+function buildOutreachDraftContent(
+  companyEnrichment: CompanyEnrichment,
+): Omit<
+  OutreachDraft,
+  | "id"
+  | "leadId"
+  | "companyId"
+  | "normalizedCompanyDomain"
+  | "companyName"
+  | "createdAt"
+  | "updatedAt"
+> {
+  const { content, evidenceBasis } = companyEnrichment;
+  const evidenceReferences = evidenceBasis.map(formatEvidenceReference);
+  const weakEvidence = isWeakOutreachEvidence(content, evidenceReferences);
+
+  if (weakEvidence) {
+    return {
+      status: "needs-evidence",
+      subject: `Follow up with ${content.company.domain}`,
+      body: [
+        `Hi ${content.company.name} team,`,
+        "",
+        `A developer from ${content.company.domain} signed up for Parallel.`,
+        "I do not yet have enough Evidence Basis to personalize this confidently, so I would keep the first touch exploratory.",
+        "",
+        `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+      ].join("\n"),
+      evidenceReferences,
+    };
+  }
+
+  const primaryAngle =
+    content.outreachSeed.personalizationAngles[0] ??
+    content.salesSignals.keyReasons[0] ??
+    "developer infrastructure";
+  const evidenceLine =
+    evidenceReferences.length > 0
+      ? `Evidence used: ${evidenceReferences.join("; ")}.`
+      : "Evidence used: none returned yet.";
+
+  return {
+    status: "ready",
+    subject: `${content.company.name} and Parallel`,
+    body: [
+      `Hi ${content.company.name} team,`,
+      "",
+      `I noticed ${content.company.name}'s work around ${primaryAngle}. Parallel helps teams turn research and enrichment workflows into reliable API-backed automation.`,
+      "",
+      `Apex flagged this Lead because ${content.salesSignals.keyReasons.join(", ")}.`,
+      evidenceLine,
+      `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+    ].join("\n"),
+    evidenceReferences,
+  };
+}
+
+function isWeakOutreachEvidence(
+  content: CompanyEnrichmentContent,
+  evidenceReferences: string[],
+): boolean {
+  const confidence = content.confidence.evidenceConfidence.trim().toLowerCase();
+
+  return (
+    evidenceReferences.length === 0 ||
+    confidence.includes("low") ||
+    confidence.includes("unknown")
+  );
+}
+
+function formatEvidenceReference(item: EvidenceBasisItem): string {
+  const firstCitation = item.citations[0];
+
+  return firstCitation
+    ? `${item.field}: ${firstCitation.title}`
+    : item.field;
+}
+
 function parseDemoSignupPayload(payload: unknown): DemoSignupPayload {
   if (!isRecord(payload)) {
     return {
@@ -1202,6 +1521,27 @@ function parseManualRefreshPayload(payload: unknown):
 
   if (!normalizedCompanyDomain) {
     return invalidManualRefreshDomain();
+  }
+
+  return {
+    ok: true,
+    normalizedCompanyDomain,
+  };
+}
+
+function parseOutreachDraftPayload(payload: unknown):
+  | { ok: true; normalizedCompanyDomain: string }
+  | { ok: false; status: 400; body: OutreachDraftError } {
+  if (!isRecord(payload)) {
+    return invalidOutreachDraftDomain();
+  }
+
+  const normalizedCompanyDomain = parseNormalizedCompanyDomain(
+    payload.normalizedCompanyDomain,
+  );
+
+  if (!normalizedCompanyDomain) {
+    return invalidOutreachDraftDomain();
   }
 
   return {
@@ -1241,6 +1581,21 @@ function invalidManualRefreshDomain(): {
     status: 400,
     body: {
       error: "Manual refresh requires a valid Normalized Company Domain.",
+    },
+  };
+}
+
+function invalidOutreachDraftDomain(): {
+  ok: false;
+  status: 400;
+  body: OutreachDraftError;
+} {
+  return {
+    ok: false,
+    status: 400,
+    body: {
+      error:
+        "Outreach Draft generation requires a valid Normalized Company Domain.",
     },
   };
 }

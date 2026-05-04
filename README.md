@@ -8,7 +8,7 @@ Apex is an internal prototype for spotting promising company leads from develope
 
 For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, and raw structured enrichment inspection. Later issues plug in outreach drafts.
+The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, raw structured enrichment inspection, and evidence-backed Outreach Draft generation.
 
 ## Why It Exists
 
@@ -91,6 +91,16 @@ APEX_ENRICHMENT_MODE=fake bun run dev
 
 The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
 
+After fake enrichment completes, generate an Outreach Draft for the resulting Lead:
+
+```bash
+curl -s http://localhost:3000/outreach-drafts \
+  -H 'content-type: application/json' \
+  -d '{"normalizedCompanyDomain":"modal.com"}'
+```
+
+The dashboard also shows a **Generate Outreach Draft** action in the selected Lead detail panel once a Lead has a completed or partial Company Enrichment.
+
 ## Freshness Window and Manual Refresh
 
 Apex reuses a fresh **Company Enrichment** for later **Developer Signups** from the same **Company** when the latest enrichment is no more than seven days old. Reuse avoids unnecessary Parallel spend while still preserving the new Developer Signup and updating the single active Lead Queue record with signup count, latest signup, Sales Timing, and Lead Score.
@@ -122,6 +132,14 @@ Completed and partial Company Enrichments produce a Lead Score from the agreed A
 The Prototype Store persists the numeric Lead Score, the score breakdown, and the top score reasons on the Lead Queue record. The dashboard shows the score in the queue and exposes the breakdown in the selected Lead detail panel.
 
 Partial Enrichments can still create scored Leads when the Company identity is usable. Missing or weaker evidence lowers Evidence Confidence instead of failing the Enrichment Run. Apex also caps otherwise high-scoring Leads below the high-score threshold when the Enrichment Run does not provide an Evidence Basis, so the dashboard does not display unsupported high-priority recommendations.
+
+## Outreach Drafts
+
+Outreach Drafts are generated only after a Lead exists and the Lead has a completed or partial Company Enrichment. Draft generation uses the Lead's Company Enrichment and Evidence Basis for personalization, then stores the draft in the Prototype Store without changing the Lead Score.
+
+Evidence-backed drafts include the evidence references used for personalization, such as the enriched field and citation title. When Evidence Confidence is low or no Evidence Basis is available, Apex creates a `needs-evidence` draft that avoids fake personalization and keeps the first touch exploratory.
+
+The selected Lead detail panel shows the latest Outreach Draft as editable subject and body fields, includes a copy button for the draft body, and lists the evidence references used. Form submissions from the dashboard redirect back to the selected Lead; JSON callers receive the created Outreach Draft payload.
 
 ## Lead Queue Dashboard
 
@@ -165,8 +183,9 @@ This repo currently has:
 - a Bun server that serves the Apex Dashboard at `/`
 - a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
 - a manual refresh endpoint at `POST /manual-refreshes` for forcing a new Enrichment Run
+- an outreach endpoint at `POST /outreach-drafts` for generating Outreach Drafts from existing Leads
 - domain classification for qualified Developer Signups and visible Unqualified Signups
-- a SQLite-backed Prototype Store that persists Developer Signups, Companies, Enrichment Runs, and initial Lead Queue records
+- a SQLite-backed Prototype Store that persists Developer Signups, Companies, Enrichment Runs, Lead Queue records, Company Enrichments, Lead Scores, and Outreach Drafts
 - Company deduplication by Normalized Company Domain, while preserving every Developer Signup
 - one active Lead Queue record per Company with signup count and latest-signup urgency signals
 - seven-day Freshness Window reuse for fresh Company Enrichments, with stale signups starting new Enrichment Runs
@@ -178,11 +197,11 @@ This repo currently has:
 - Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence
 - persisted score breakdowns and top score reasons on Lead Queue records
 - a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
+- evidence-backed Outreach Draft generation that stays independent from Lead Score
+- weak-evidence Outreach Draft fallback that avoids fake personalization
 - score-first and recent-signup Lead Queue sorting
-- selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, and raw structured Company Enrichment
+- selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, editable/copyable Outreach Drafts, and raw structured Company Enrichment
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, and Lead Score behavior
+- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, Lead Score behavior, and Outreach Draft behavior
 - WSL-focused setup notes
-
-The next enrichment issue adds outreach draft generation behind the existing lifecycle.
