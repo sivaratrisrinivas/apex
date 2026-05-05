@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  CORE2X_ENRICHMENT_TASK_SPEC,
-  createCore2xEnrichmentWorker,
+  ENRICHMENT_TASK_SPEC,
+  createEnrichmentWorker,
   createParallelTaskClientFromEnv,
   type FetchImplementation,
   type ParallelTaskClient,
@@ -26,7 +26,7 @@ async function waitForBackgroundWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe("Core2x Enrichment", () => {
+describe("Parallel Enrichment", () => {
   test("persists a completed Company Enrichment with Evidence Basis", async () => {
     const app = createApp({
       enrichmentWorker: async () =>
@@ -101,7 +101,7 @@ describe("Core2x Enrichment", () => {
     expect(html).toContain("Serverless infrastructure for AI workloads.");
   });
 
-  test("submits Enrichment Runs to Parallel with Core2x and a strict Enrichment Schema", async () => {
+  test("submits Enrichment Runs to Parallel with a strict Enrichment Schema", async () => {
     const requests: Parameters<ParallelTaskClient["createTaskRun"]>[0][] = [];
     const taskClient: ParallelTaskClient = {
       createTaskRun: async (request) => {
@@ -162,7 +162,7 @@ describe("Core2x Enrichment", () => {
         },
       }),
     };
-    const worker = createCore2xEnrichmentWorker({ taskClient });
+    const worker = createEnrichmentWorker({ taskClient });
 
     const completion = await worker(enrichmentRunFor("modal.com"));
 
@@ -172,7 +172,7 @@ describe("Core2x Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core2x",
+      processor: "core",
       metadata: {
         apex_run: "enrichment_run_1",
         domain: "modal.com",
@@ -232,7 +232,7 @@ describe("Core2x Enrichment", () => {
         return Response.json({
           run_id: "trun_modal",
           status: "queued",
-          processor: "core2x",
+          processor: "core",
         });
       }
 
@@ -240,7 +240,7 @@ describe("Core2x Enrichment", () => {
         run: {
           run_id: "trun_modal",
           status: "completed",
-          processor: "core2x",
+          processor: "core",
         },
         output: {
           type: "json",
@@ -292,8 +292,8 @@ describe("Core2x Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core2x",
-      taskSpec: CORE2X_ENRICHMENT_TASK_SPEC,
+      processor: "core",
+      taskSpec: ENRICHMENT_TASK_SPEC,
       metadata: {
         apex_run: "enrichment_run_1",
         domain: "modal.com",
@@ -314,20 +314,85 @@ describe("Core2x Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core2x",
-      task_spec: CORE2X_ENRICHMENT_TASK_SPEC,
+      processor: "core",
+      task_spec: ENRICHMENT_TASK_SPEC,
       metadata: {
         apex_run: "enrichment_run_1",
         domain: "modal.com",
       },
     });
     expect(calls[1].url).toBe(
-      "https://parallel.test/v1/tasks/runs/trun_modal/result?timeout=30",
+      "https://parallel.test/v1/tasks/runs/trun_modal/result?timeout=25",
     );
     expect(calls[1].headers.get("x-api-key")).toBe("parallel_secret");
   });
 
-  test("uses Core2x Enrichment for normal automated Enrichment Runs when configured", async () => {
+  test("polls Parallel result retrieval with short per-request timeouts", async () => {
+    const calls: { url: string; headers: Headers }[] = [];
+    let resultRequests = 0;
+    const client = createParallelTaskClientFromEnv({
+      env: {
+        PARALLEL_API_KEY: "parallel_secret",
+        PARALLEL_API_BASE_URL: "https://parallel.test",
+      },
+      fetch: async (input, init) => {
+        calls.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+        });
+        resultRequests += 1;
+
+        if (resultRequests === 1) {
+          return Response.json(
+            {
+              error: {
+                message: "Task run is still running.",
+              },
+            },
+            { status: 408 },
+          );
+        }
+
+        return Response.json({
+          run: {
+            run_id: "trun_modal",
+            status: "completed",
+            processor: "core",
+          },
+          output: {
+            type: "json",
+            content: {
+              company: {
+                name: "Modal Labs",
+              },
+            },
+            basis: [],
+          },
+        });
+      },
+    });
+
+    const result = await client.retrieveTaskRunResult("trun_modal", {
+      timeoutSeconds: 60,
+      retryDelayMilliseconds: 0,
+    });
+
+    expect(result.output.content).toMatchObject({
+      company: {
+        name: "Modal Labs",
+      },
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://parallel.test/v1/tasks/runs/trun_modal/result?timeout=25",
+      "https://parallel.test/v1/tasks/runs/trun_modal/result?timeout=25",
+    ]);
+    expect(
+      calls.every((call) => call.headers.get("x-api-key") === "parallel_secret"),
+    ).toBe(true);
+  });
+
+  test("uses Parallel enrichment for normal automated Enrichment Runs when configured", async () => {
     const requests: Parameters<ParallelTaskClient["createTaskRun"]>[0][] = [];
     const taskClient: ParallelTaskClient = {
       createTaskRun: async (request) => {
@@ -389,7 +454,7 @@ describe("Core2x Enrichment", () => {
     const html = await dashboard.text();
 
     expect(requests).toHaveLength(1);
-    expect(requests[0].processor).toBe("core2x");
+    expect(requests[0].processor).toBe("core");
     expect(html).toContain("Modal Labs");
     expect(html).toContain("High");
   });

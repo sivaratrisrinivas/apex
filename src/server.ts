@@ -1,6 +1,6 @@
 import { renderDashboard } from "./dashboard";
 import {
-  createCore2xEnrichmentWorker,
+  createEnrichmentWorker,
   createFakeParallelEnrichmentWorker,
   createParallelTaskClientFromEnv,
   type ParallelTaskClient,
@@ -254,7 +254,7 @@ function resolveEnrichmentWorker(
   }
 
   if (options.parallelTaskClient) {
-    return createCore2xEnrichmentWorker({
+    return createEnrichmentWorker({
       taskClient: options.parallelTaskClient,
     });
   }
@@ -272,7 +272,7 @@ function resolveEnrichmentWorker(
   }
 
   console.log(`[apex] Enrichment mode: LIVE (using Parallel API key from env)`);
-  return createCore2xEnrichmentWorker({
+  return createEnrichmentWorker({
     taskClient: createParallelTaskClientFromEnv({ env }),
   });
 }

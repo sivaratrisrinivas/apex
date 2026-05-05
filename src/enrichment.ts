@@ -11,18 +11,20 @@ export interface JsonSchemaParameter {
 }
 
 export interface ParallelTaskSpec {
-  input_schema: JsonSchemaParameter;
+  input_schema?: JsonSchemaParameter;
   output_schema: JsonSchemaParameter;
 }
+
+export type ParallelProcessor = "lite" | "base" | "core" | "pro" | "ultra";
 
 export interface ParallelTaskRunRequest {
   input: {
     normalizedCompanyDomain: string;
     companyWebsite: string;
   };
-  processor: "core2x";
+  processor: ParallelProcessor;
   taskSpec: ParallelTaskSpec;
-  metadata: Record<string, string>;
+  metadata: Record<string, string | number | boolean>;
 }
 
 export interface ParallelTaskRunResult {
@@ -33,11 +35,17 @@ export interface ParallelTaskRunResult {
   };
 }
 
+export interface RetrieveTaskRunResultOptions {
+  timeoutSeconds?: number;
+  requestTimeoutSeconds?: number;
+  retryDelayMilliseconds?: number;
+}
+
 export interface ParallelTaskClient {
   createTaskRun(request: ParallelTaskRunRequest): Promise<{ runId: string }>;
   retrieveTaskRunResult(
     runId: string,
-    options?: { timeoutSeconds?: number },
+    options?: RetrieveTaskRunResultOptions,
   ): Promise<ParallelTaskRunResult>;
 }
 
@@ -51,7 +59,11 @@ interface ParallelTaskClientFromEnvOptions {
   fetch?: FetchImplementation;
 }
 
-export const CORE2X_ENRICHMENT_TASK_SPEC: ParallelTaskSpec = {
+const DEFAULT_RESULT_TOTAL_TIMEOUT_SECONDS = 600;
+const DEFAULT_RESULT_REQUEST_TIMEOUT_SECONDS = 25;
+const DEFAULT_RESULT_RETRY_DELAY_MILLISECONDS = 250;
+
+export const ENRICHMENT_TASK_SPEC: ParallelTaskSpec = {
   input_schema: {
     type: "json",
     json_schema: {
@@ -202,6 +214,9 @@ export const CORE2X_ENRICHMENT_TASK_SPEC: ParallelTaskSpec = {
   },
 };
 
+/** @deprecated Use ENRICHMENT_TASK_SPEC instead. */
+export const CORE2X_ENRICHMENT_TASK_SPEC: ParallelTaskSpec = ENRICHMENT_TASK_SPEC;
+
 export function createParallelTaskClientFromEnv(
   options: ParallelTaskClientFromEnvOptions = {},
 ): ParallelTaskClient {
@@ -209,7 +224,7 @@ export function createParallelTaskClientFromEnv(
   const apiKey = env.PARALLEL_API_KEY?.trim();
 
   if (!apiKey) {
-    throw new Error("PARALLEL_API_KEY must be set to run live Core2x Enrichment.");
+    throw new Error("PARALLEL_API_KEY must be set to run live Parallel enrichment.");
   }
 
   return new HttpParallelTaskClient({
@@ -219,28 +234,33 @@ export function createParallelTaskClientFromEnv(
   });
 }
 
-export function createCore2xEnrichmentWorker(options: {
+/** @deprecated Use createEnrichmentWorker instead. */
+export const createCore2xEnrichmentWorker = createEnrichmentWorker;
+
+export function createEnrichmentWorker(options: {
   taskClient: ParallelTaskClient;
+  processor?: ParallelProcessor;
 }): (enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion> {
+  const processor = options.processor ?? "core";
   return async (enrichmentRun) => {
-    console.log(`[apex]   → [Core2x] Creating task run for ${enrichmentRun.normalizedCompanyDomain}`);
+    console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
     const taskRun = await options.taskClient.createTaskRun({
       input: {
         normalizedCompanyDomain: enrichmentRun.normalizedCompanyDomain,
         companyWebsite: `https://${enrichmentRun.normalizedCompanyDomain}`,
       },
-      processor: "core2x",
-      taskSpec: CORE2X_ENRICHMENT_TASK_SPEC,
+      processor,
+      taskSpec: ENRICHMENT_TASK_SPEC,
       metadata: {
         apex_run: enrichmentRun.id,
         domain: enrichmentRun.normalizedCompanyDomain,
       },
     });
-    console.log(`[apex]   → [Core2x] Task run created: ${taskRun.runId} — waiting for result (timeout: 600s)...`);
+    console.log(`[apex]   → [Parallel] Task run created: ${taskRun.runId} — waiting for result (timeout: 600s)...`);
     const result = await options.taskClient.retrieveTaskRunResult(taskRun.runId, {
       timeoutSeconds: 600,
     });
-    console.log(`[apex]   → [Core2x] Task run result received`);
+    console.log(`[apex]   → [Parallel] Task run result received`);
 
     return {
       status: "completed",
@@ -438,27 +458,126 @@ class HttpParallelTaskClient implements ParallelTaskClient {
 
   async retrieveTaskRunResult(
     runId: string,
-    options: { timeoutSeconds?: number } = {},
+    options: RetrieveTaskRunResultOptions = {},
+  ): Promise<ParallelTaskRunResult> {
+    const totalTimeoutSeconds = positiveNumberOrDefault(
+      options.timeoutSeconds,
+      DEFAULT_RESULT_TOTAL_TIMEOUT_SECONDS,
+    );
+    const requestTimeoutSeconds = Math.min(
+      positiveNumberOrDefault(
+        options.requestTimeoutSeconds,
+        DEFAULT_RESULT_REQUEST_TIMEOUT_SECONDS,
+      ),
+      totalTimeoutSeconds,
+    );
+    const retryDelayMilliseconds = Math.max(
+      0,
+      options.retryDelayMilliseconds ?? DEFAULT_RESULT_RETRY_DELAY_MILLISECONDS,
+    );
+    const deadline = Date.now() + totalTimeoutSeconds * 1000;
+    let attempt = 0;
+    let lastNotReadyError: Error | undefined;
+
+    while (Date.now() < deadline) {
+      attempt += 1;
+      const remainingSeconds = Math.max(
+        1,
+        Math.ceil((deadline - Date.now()) / 1000),
+      );
+      const timeoutForAttemptSeconds = Math.min(
+        requestTimeoutSeconds,
+        remainingSeconds,
+      );
+
+      try {
+        return await this.retrieveTaskRunResultOnce(
+          runId,
+          timeoutForAttemptSeconds,
+          attempt,
+          totalTimeoutSeconds,
+        );
+      } catch (error) {
+        if (!(error instanceof ParallelResultNotReadyError)) {
+          throw error;
+        }
+
+        lastNotReadyError = error instanceof Error ? error : undefined;
+
+        if (Date.now() >= deadline) {
+          break;
+        }
+
+        console.log(
+          `[apex]   → [Parallel API] Result not ready yet; retrying (attempt ${attempt})`,
+        );
+
+        await delay(
+          Math.min(retryDelayMilliseconds, Math.max(0, deadline - Date.now())),
+        );
+      }
+    }
+
+    const detail = lastNotReadyError
+      ? `: ${lastNotReadyError.message}`
+      : ".";
+
+    throw new Error(
+      `Parallel Task API retrieve task run result timed out after ${totalTimeoutSeconds}s${detail}`,
+    );
+  }
+
+  private async retrieveTaskRunResultOnce(
+    runId: string,
+    timeoutSeconds: number,
+    attempt: number,
+    totalTimeoutSeconds: number,
   ): Promise<ParallelTaskRunResult> {
     const url = new URL(
       `${this.baseUrl}/v1/tasks/runs/${encodeURIComponent(runId)}/result`,
     );
+    url.searchParams.set("timeout", String(timeoutSeconds));
 
-    if (options.timeoutSeconds !== undefined) {
-      url.searchParams.set("timeout", String(options.timeoutSeconds));
+    console.log(
+      `[apex]   → [Parallel API] GET /v1/tasks/runs/${runId}/result (attempt ${attempt}, request timeout: ${timeoutSeconds}s, budget: ${totalTimeoutSeconds}s)`,
+    );
+    let response: Response;
+
+    try {
+      response = await this.fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "x-api-key": this.apiKey,
+        },
+      });
+    } catch (error) {
+      if (isLikelyTimeoutError(error)) {
+        throw new ParallelResultNotReadyError(
+          `Parallel task run result request timed out after ${timeoutSeconds}s.`,
+        );
+      }
+
+      throw error;
     }
 
-    console.log(`[apex]   → [Parallel API] GET /v1/tasks/runs/${runId}/result`);
-    const response = await this.fetch(url.toString(), {
-      method: "GET",
-      headers: {
-        "x-api-key": this.apiKey,
-      },
-    });
     const body = await readJsonResponse(response);
 
     if (!response.ok) {
-      console.log(`[apex]   → [Parallel API] Retrieve result failed: HTTP ${response.status}`);
+      if (response.status === 408) {
+        throw new ParallelResultNotReadyError(
+          `Parallel task run result was not ready after ${timeoutSeconds}s.`,
+        );
+      }
+
+      if (response.status === 404) {
+        throw new Error(
+          `Parallel Task API task run failed or not found (HTTP 404).`,
+        );
+      }
+
+      console.log(
+        `[apex]   → [Parallel API] Retrieve result failed: HTTP ${response.status}`,
+      );
       throw parallelApiError("retrieve task run result", response, body);
     }
 
@@ -472,6 +591,12 @@ class HttpParallelTaskClient implements ParallelTaskClient {
       console.log(`[apex]   → [Parallel API] Task run failed on server side`);
       throw new Error(
         `Parallel Task API task run failed: ${extractParallelErrorMessage(run.error)}`,
+      );
+    }
+
+    if (isActiveTaskRunStatus(run?.status)) {
+      throw new ParallelResultNotReadyError(
+        `Parallel task run is still ${String(run?.status)}.`,
       );
     }
 
@@ -498,6 +623,49 @@ class HttpParallelTaskClient implements ParallelTaskClient {
       "x-api-key": this.apiKey,
     };
   }
+}
+
+class ParallelResultNotReadyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ParallelResultNotReadyError";
+  }
+}
+
+function positiveNumberOrDefault(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
+function isLikelyTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+
+  return message.includes("timeout") || message.includes("timed out");
+}
+
+function isActiveTaskRunStatus(status: unknown): boolean {
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "action_required" ||
+    status === "cancelling"
+  );
+}
+
+function delay(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
