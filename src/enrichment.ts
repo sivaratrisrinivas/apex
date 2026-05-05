@@ -223,6 +223,7 @@ export function createCore2xEnrichmentWorker(options: {
   taskClient: ParallelTaskClient;
 }): (enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion> {
   return async (enrichmentRun) => {
+    console.log(`[apex]   → [Core2x] Creating task run for ${enrichmentRun.normalizedCompanyDomain}`);
     const taskRun = await options.taskClient.createTaskRun({
       input: {
         normalizedCompanyDomain: enrichmentRun.normalizedCompanyDomain,
@@ -235,9 +236,11 @@ export function createCore2xEnrichmentWorker(options: {
         domain: enrichmentRun.normalizedCompanyDomain,
       },
     });
+    console.log(`[apex]   → [Core2x] Task run created: ${taskRun.runId} — waiting for result (timeout: 600s)...`);
     const result = await options.taskClient.retrieveTaskRunResult(taskRun.runId, {
       timeoutSeconds: 600,
     });
+    console.log(`[apex]   → [Core2x] Task run result received`);
 
     return {
       status: "completed",
@@ -253,17 +256,20 @@ export function createFakeParallelEnrichmentWorker(): (
   enrichmentRun: EnrichmentRun,
 ) => Promise<EnrichmentRunCompletion> {
   return async (enrichmentRun) => {
+    console.log(`[apex]   → [Fake] Looking up fixture for: ${enrichmentRun.normalizedCompanyDomain}`);
     const fixture = FAKE_PARALLEL_ENRICHMENT_FIXTURES[
       enrichmentRun.normalizedCompanyDomain
     ];
 
     if (!fixture) {
+      console.log(`[apex]   → [Fake] No fixture found — returning failure`);
       return {
         status: "failed",
         failureReason: `No fake Parallel enrichment fixture exists for ${enrichmentRun.normalizedCompanyDomain}.`,
       };
     }
 
+    console.log(`[apex]   → [Fake] Fixture found — returning ${fixture.status} enrichment`);
     return structuredClone(fixture);
   };
 }
@@ -405,6 +411,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
   }
 
   async createTaskRun(request: ParallelTaskRunRequest): Promise<{ runId: string }> {
+    console.log(`[apex]   → [Parallel API] POST /v1/tasks/runs for ${request.input.normalizedCompanyDomain}`);
     const response = await this.fetch(`${this.baseUrl}/v1/tasks/runs`, {
       method: "POST",
       headers: this.headers(),
@@ -418,14 +425,15 @@ class HttpParallelTaskClient implements ParallelTaskClient {
     const body = await readJsonResponse(response);
 
     if (!response.ok) {
+      console.log(`[apex]   → [Parallel API] Create task run failed: HTTP ${response.status}`);
       throw parallelApiError("create task run", response, body);
     }
 
     const taskRun = expectRecord(body, "Parallel task run response");
+    const runId = expectString(taskRun.run_id, "Parallel task run response.run_id");
+    console.log(`[apex]   → [Parallel API] Task run created: ${runId}`);
 
-    return {
-      runId: expectString(taskRun.run_id, "Parallel task run response.run_id"),
-    };
+    return { runId };
   }
 
   async retrieveTaskRunResult(
@@ -440,6 +448,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
       url.searchParams.set("timeout", String(options.timeoutSeconds));
     }
 
+    console.log(`[apex]   → [Parallel API] GET /v1/tasks/runs/${runId}/result`);
     const response = await this.fetch(url.toString(), {
       method: "GET",
       headers: {
@@ -449,6 +458,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
     const body = await readJsonResponse(response);
 
     if (!response.ok) {
+      console.log(`[apex]   → [Parallel API] Retrieve result failed: HTTP ${response.status}`);
       throw parallelApiError("retrieve task run result", response, body);
     }
 
@@ -459,10 +469,13 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         : expectRecord(result.run, "Parallel task run result.run");
 
     if (run?.status === "failed") {
+      console.log(`[apex]   → [Parallel API] Task run failed on server side`);
       throw new Error(
         `Parallel Task API task run failed: ${extractParallelErrorMessage(run.error)}`,
       );
     }
+
+    console.log(`[apex]   → [Parallel API] Result received successfully`);
 
     const output = expectRecord(result.output, "Parallel task run result.output");
 
