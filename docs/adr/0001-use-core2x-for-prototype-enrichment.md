@@ -1,3 +1,3 @@
-# Use Core2x for prototype enrichment
+# Use Core2x-fast for prototype enrichment
 
-Apex will use Parallel's Core2x processor for normal prototype enrichment runs because the prototype is demonstrating cost-conscious structured lead enrichment, not exhaustive deep research. Higher-depth processors may become a future manual escalation path, but automatic processor upgrades would obscure the demo's economics and make every inbound signup look more expensive than the product story requires.
+Apex will use Parallel's `core2x-fast` processor for normal prototype enrichment runs because the prototype is demonstrating cost-conscious, low-latency structured lead enrichment, not exhaustive deep research. This still fits the domain term **Core2x Enrichment**: the fast variant keeps the same Core2x capability tier while better matching the demo's Near-Real-Time Enrichment experience. Higher-depth processors may become a future manual escalation path, but automatic processor upgrades would obscure the demo's economics and make every inbound signup look more expensive than the product story requires.

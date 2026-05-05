@@ -13,6 +13,7 @@ interface DashboardOptions {
   selectedLeadDomain?: string;
   leadQueueSort?: LeadQueueSort;
   activeView?: DashboardView;
+  liveRefreshEnabled?: boolean;
 }
 
 type DashboardView = "intake" | "queue" | "lead" | "draft" | "activity";
@@ -27,6 +28,9 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         options.selectedLeadDomain?.trim().toLowerCase(),
     ) ?? leadQueue[0];
   const activeView = resolveActiveView(options.activeView, leadQueue, selectedLead);
+  const liveRefreshEnabled =
+    options.liveRefreshEnabled === true &&
+    (options.enrichmentRuns ?? []).some((run) => isActiveEnrichmentStatus(run.status));
 
   return `<!doctype html>
 <html lang="en">
@@ -113,6 +117,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         setTimeout(function() { btn.textContent = orig; }, 1400);
       });
     </script>
+    ${formatLiveRefreshScript(liveRefreshEnabled)}
   </body>
 </html>`;
 }
@@ -439,6 +444,23 @@ function formatMockTerritory(domain: string): string {
 
 function formatEmpty(msg: string): string {
   return `<div class="panel"><div class="empty"><p>${esc(msg)}</p></div></div>`;
+}
+
+function formatLiveRefreshScript(enabled: boolean): string {
+  if (!enabled) return "";
+
+  return `
+    <script data-apex-live-refresh>
+      window.setTimeout(function() {
+        if (document.visibilityState === 'visible') {
+          window.location.reload();
+        }
+      }, 2500);
+    </script>`;
+}
+
+function isActiveEnrichmentStatus(status: EnrichmentRun["status"]): boolean {
+  return status === "pending" || status === "researching";
 }
 
 function resolveActiveView(

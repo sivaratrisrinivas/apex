@@ -175,7 +175,7 @@ APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
 
 ## Live Core2x Enrichment
 
-Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment or in `.env.local`.
+Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment or in `.env.local`. The live worker defaults to Parallel's `core2x-fast` processor so the prototype keeps Core2x-level structured enrichment while preserving a responsive demo loop.
 
 Create `.env.local` in the repo root:
 
@@ -218,7 +218,9 @@ This repo currently has:
 - seven-day Freshness Window reuse for fresh Company Enrichments, with stale signups starting new Enrichment Runs
 - a dashboard Manual refresh action for selected Leads
 - asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
-- live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set in the shell or `.env.local`
+- recoverable Enrichment Runs that resume from the Prototype Store when a configured worker is available after restart
+- live Core2x Parallel Task API wiring via `core2x-fast` when `PARALLEL_API_KEY` is set in the shell or `.env.local`
+- Partial Enrichment fallback when Parallel returns usable Company identity with missing non-critical fields
 - fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
 - persisted Company Enrichments and Evidence Basis for completed live or fake worker results
 - Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence
@@ -229,6 +231,7 @@ This repo currently has:
 - weak-evidence Outreach Draft fallback that avoids fake personalization
 - score-first and recent-signup Lead Queue sorting
 - selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, editable/copyable Outreach Drafts, and raw structured Company Enrichment
+- live dashboard refresh while active Enrichment Runs are progressing under a configured worker
 - visible `unqualified` status for Unqualified Signups without starting research
 - a styled dashboard with a lead queue, selected lead detail panel, and visible signup intake history
 - automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, Lead Score behavior, Outreach Draft behavior, and the WSL demo script

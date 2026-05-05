@@ -172,7 +172,7 @@ describe("Parallel Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core",
+      processor: "core2x-fast",
       metadata: {
         apex_run: "enrichment_run_1",
         domain: "modal.com",
@@ -217,6 +217,56 @@ describe("Parallel Enrichment", () => {
     });
   });
 
+  test("keeps usable Company identity as Partial Enrichment when non-critical fields are missing", async () => {
+    const taskClient: ParallelTaskClient = {
+      createTaskRun: async () => ({
+        runId: "trun_modal",
+      }),
+      retrieveTaskRunResult: async () => ({
+        output: {
+          type: "json",
+          content: {
+            company: {
+              name: "Modal Labs",
+              domain: "modal.com",
+            },
+            salesSignals: {
+              keyReasons: ["AI infrastructure workload"],
+            },
+          },
+          basis: [],
+        },
+      }),
+    };
+    const worker = createEnrichmentWorker({ taskClient });
+
+    const completion = await worker(enrichmentRunFor("modal.com"));
+
+    expect(completion.status).toBe("partial");
+    if (completion.status === "failed" || !completion.companyEnrichment) {
+      throw new Error("Expected Partial Enrichment with Company Enrichment.");
+    }
+
+    expect(completion.companyEnrichment.content).toMatchObject({
+      company: {
+        name: "Modal Labs",
+        domain: "modal.com",
+        headquarters: "Unknown",
+        employeeRange: "Unknown",
+      },
+      funding: {
+        stage: "Unknown",
+        totalRaised: "Unknown",
+      },
+      confidence: {
+        evidenceConfidence: "Low",
+      },
+    });
+    expect(completion.companyEnrichment.content.confidence.notes).toContain(
+      "Parallel omitted or returned invalid non-critical fields",
+    );
+  });
+
   test("reads Parallel credentials from WSL environment variables", async () => {
     const calls: { url: string; headers: Headers; body?: unknown }[] = [];
     const fetchImplementation: FetchImplementation = async (input, init) => {
@@ -232,7 +282,7 @@ describe("Parallel Enrichment", () => {
         return Response.json({
           run_id: "trun_modal",
           status: "queued",
-          processor: "core",
+          processor: "core2x-fast",
         });
       }
 
@@ -240,7 +290,7 @@ describe("Parallel Enrichment", () => {
         run: {
           run_id: "trun_modal",
           status: "completed",
-          processor: "core",
+          processor: "core2x-fast",
         },
         output: {
           type: "json",
@@ -292,7 +342,7 @@ describe("Parallel Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core",
+      processor: "core2x-fast",
       taskSpec: ENRICHMENT_TASK_SPEC,
       metadata: {
         apex_run: "enrichment_run_1",
@@ -314,7 +364,7 @@ describe("Parallel Enrichment", () => {
         normalizedCompanyDomain: "modal.com",
         companyWebsite: "https://modal.com",
       },
-      processor: "core",
+      processor: "core2x-fast",
       task_spec: ENRICHMENT_TASK_SPEC,
       metadata: {
         apex_run: "enrichment_run_1",
@@ -357,7 +407,7 @@ describe("Parallel Enrichment", () => {
           run: {
             run_id: "trun_modal",
             status: "completed",
-            processor: "core",
+            processor: "core2x-fast",
           },
           output: {
             type: "json",
@@ -454,7 +504,7 @@ describe("Parallel Enrichment", () => {
     const html = await dashboard.text();
 
     expect(requests).toHaveLength(1);
-    expect(requests[0].processor).toBe("core");
+    expect(requests[0].processor).toBe("core2x-fast");
     expect(html).toContain("Modal Labs");
     expect(html).toContain("High");
   });

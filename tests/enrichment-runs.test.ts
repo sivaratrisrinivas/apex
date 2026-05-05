@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, test } from "bun:test";
 
 import { createApp, type EnrichmentRunCompletion } from "../src/server";
@@ -34,6 +37,10 @@ async function waitForBackgroundWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function temporaryStorePath(): string {
+  return join(mkdtempSync("/tmp/apex-enrichment-runs-"), "prototype.sqlite");
+}
+
 describe("Enrichment Run lifecycle", () => {
   test("acknowledges a qualified Developer Signup while research continues in the background", async () => {
     const completion = deferred<EnrichmentRunCompletion>();
@@ -66,6 +73,7 @@ describe("Enrichment Run lifecycle", () => {
 
     expect(html).toContain("researching");
     expect(html).not.toContain(">failed<");
+    expect(html).toContain("data-apex-live-refresh");
 
     completion.resolve({ status: "completed" });
     await waitForBackgroundWork();
@@ -93,6 +101,7 @@ describe("Enrichment Run lifecycle", () => {
 
     expect(html).toContain('data-status="researching">researching</mark>');
     expect(html).not.toContain('data-status="failed">failed</mark>');
+    expect(html).not.toContain("data-apex-live-refresh");
   });
 
   test("shows completed, partial, and failed Enrichment Status outcomes", async () => {
@@ -158,5 +167,37 @@ describe("Enrichment Run lifecycle", () => {
     expect(startedRuns).toHaveLength(0);
     expect(html).toContain('data-status="unqualified">unqualified</mark>');
     expect(html).toContain("personal-domain");
+  });
+
+  test("resumes persisted active Enrichment Runs when a worker is available after restart", async () => {
+    const prototypeStorePath = temporaryStorePath();
+    const firstApp = createApp({ prototypeStorePath });
+
+    const signupResponse = await postDemoSignup(firstApp, {
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+
+    expect(signupResponse.status).toBe(201);
+    await waitForBackgroundWork();
+
+    const resumedRuns: string[] = [];
+    const reloadedApp = createApp({
+      prototypeStorePath,
+      enrichmentWorker: async (enrichmentRun) => {
+        resumedRuns.push(`${enrichmentRun.id}:${enrichmentRun.normalizedCompanyDomain}`);
+
+        return { status: "completed" };
+      },
+    });
+
+    await waitForBackgroundWork();
+
+    expect(resumedRuns).toEqual(["enrichment_run_1:modal.com"]);
+
+    const dashboard = await reloadedApp.fetch(new Request("http://localhost/"));
+    const html = await dashboard.text();
+
+    expect(html).toContain('data-status="completed">completed</mark>');
   });
 });

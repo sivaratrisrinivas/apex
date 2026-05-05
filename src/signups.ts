@@ -488,6 +488,31 @@ export class PrototypeStore {
     return rows.map(mapEnrichmentRunRow);
   }
 
+  listRecoverableEnrichmentRuns(): EnrichmentRun[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            sequence,
+            id,
+            developer_signup_id,
+            company_id,
+            normalized_company_domain,
+            status,
+            requested_at,
+            started_at,
+            finished_at,
+            failure_reason
+          FROM enrichment_runs
+          WHERE status IN ('pending', 'researching')
+          ORDER BY sequence ASC
+        `,
+      )
+      .all() as EnrichmentRunRow[];
+
+    return rows.map(mapEnrichmentRunRow);
+  }
+
   getEnrichmentRun(id: string): EnrichmentRun | null {
     const row = this.getEnrichmentRunRow(id);
 
@@ -774,6 +799,31 @@ export class PrototypeStore {
         FOREIGN KEY (lead_id) REFERENCES leads(id),
         FOREIGN KEY (company_id) REFERENCES companies(id)
       )
+    `);
+
+    this.database.run(`
+      CREATE INDEX IF NOT EXISTS idx_developer_signups_company_activity
+      ON developer_signups (normalized_company_domain, qualification, signed_up_at, sequence)
+    `);
+
+    this.database.run(`
+      CREATE INDEX IF NOT EXISTS idx_enrichment_runs_recovery
+      ON enrichment_runs (status, sequence)
+    `);
+
+    this.database.run(`
+      CREATE INDEX IF NOT EXISTS idx_enrichment_runs_company_sequence
+      ON enrichment_runs (company_id, sequence)
+    `);
+
+    this.database.run(`
+      CREATE INDEX IF NOT EXISTS idx_company_enrichments_latest
+      ON company_enrichments (company_id, sequence)
+    `);
+
+    this.database.run(`
+      CREATE INDEX IF NOT EXISTS idx_outreach_drafts_latest
+      ON outreach_drafts (lead_id, sequence)
     `);
   }
 

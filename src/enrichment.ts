@@ -15,7 +15,19 @@ export interface ParallelTaskSpec {
   output_schema: JsonSchemaParameter;
 }
 
-export type ParallelProcessor = "lite" | "base" | "core" | "pro" | "ultra";
+export type ParallelProcessor =
+  | "lite"
+  | "base"
+  | "core"
+  | "core2x"
+  | "pro"
+  | "ultra"
+  | "lite-fast"
+  | "base-fast"
+  | "core-fast"
+  | "core2x-fast"
+  | "pro-fast"
+  | "ultra-fast";
 
 export interface ParallelTaskRunRequest {
   input: {
@@ -241,7 +253,7 @@ export function createEnrichmentWorker(options: {
   taskClient: ParallelTaskClient;
   processor?: ParallelProcessor;
 }): (enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion> {
-  const processor = options.processor ?? "core";
+  const processor = options.processor ?? "core2x-fast";
   return async (enrichmentRun) => {
     console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
     const taskRun = await options.taskClient.createTaskRun({
@@ -261,11 +273,12 @@ export function createEnrichmentWorker(options: {
       timeoutSeconds: 600,
     });
     console.log(`[apex]   → [Parallel] Task run result received`);
+    const parsedContent = parseCompanyEnrichmentContent(result.output.content);
 
     return {
-      status: "completed",
+      status: parsedContent.partialReasons.length > 0 ? "partial" : "completed",
       companyEnrichment: {
-        content: parseCompanyEnrichmentContent(result.output.content),
+        content: parsedContent.content,
         evidenceBasis: parseEvidenceBasis(result.output.basis),
       },
     };
@@ -708,93 +721,247 @@ function extractParallelErrorMessage(value: unknown): string {
   return "Unknown Parallel API error.";
 }
 
-function parseCompanyEnrichmentContent(value: unknown): CompanyEnrichmentContent {
+function parseCompanyEnrichmentContent(value: unknown): {
+  content: CompanyEnrichmentContent;
+  partialReasons: string[];
+} {
   const content = expectRecord(value, "Parallel result content");
+  const partialReasons: string[] = [];
+  const company = parseCompanySection(content.company, partialReasons);
+  const funding = parseFundingSection(content.funding, partialReasons);
+  const technicalSignals = parseTechnicalSignals(
+    content.technicalSignals,
+    partialReasons,
+  );
+  const salesSignals = parseSalesSignals(content.salesSignals, partialReasons);
+  const confidence = parseConfidence(content.confidence, partialReasons);
+  const outreachSeed = parseOutreachSeed(content.outreachSeed, partialReasons);
+
+  if (partialReasons.length > 0) {
+    confidence.evidenceConfidence = "Low";
+    confidence.notes = appendPartialNotes(confidence.notes, partialReasons);
+  }
 
   return {
-    company: parseCompanySection(content.company),
-    funding: parseFundingSection(content.funding),
-    technicalSignals: parseTechnicalSignals(content.technicalSignals),
-    salesSignals: parseSalesSignals(content.salesSignals),
-    confidence: parseConfidence(content.confidence),
-    outreachSeed: parseOutreachSeed(content.outreachSeed),
+    content: {
+      company,
+      funding,
+      technicalSignals,
+      salesSignals,
+      confidence,
+      outreachSeed,
+    },
+    partialReasons,
   };
 }
 
-function parseCompanySection(value: unknown): CompanyEnrichmentContent["company"] {
+function parseCompanySection(
+  value: unknown,
+  partialReasons: string[],
+): CompanyEnrichmentContent["company"] {
   const section = expectRecord(value, "company");
 
   return {
     name: expectString(section.name, "company.name"),
     domain: expectString(section.domain, "company.domain"),
-    headquarters: expectString(section.headquarters, "company.headquarters"),
-    employeeRange: expectString(section.employeeRange, "company.employeeRange"),
+    headquarters: parseOptionalStringField(
+      section.headquarters,
+      "company.headquarters",
+      partialReasons,
+      "Unknown",
+    ),
+    employeeRange: parseOptionalStringField(
+      section.employeeRange,
+      "company.employeeRange",
+      partialReasons,
+      "Unknown",
+    ),
   };
 }
 
-function parseFundingSection(value: unknown): CompanyEnrichmentContent["funding"] {
-  const section = expectRecord(value, "funding");
+function parseFundingSection(
+  value: unknown,
+  partialReasons: string[],
+): CompanyEnrichmentContent["funding"] {
+  const section = parseOptionalRecord(value, "funding", partialReasons);
 
   return {
-    stage: expectString(section.stage, "funding.stage"),
-    totalRaised: expectString(section.totalRaised, "funding.totalRaised"),
-    latestRound: expectString(section.latestRound, "funding.latestRound"),
-    latestRoundDate: expectString(section.latestRoundDate, "funding.latestRoundDate"),
+    stage: parseOptionalStringField(
+      section.stage,
+      "funding.stage",
+      partialReasons,
+      "Unknown",
+    ),
+    totalRaised: parseOptionalStringField(
+      section.totalRaised,
+      "funding.totalRaised",
+      partialReasons,
+      "Unknown",
+    ),
+    latestRound: parseOptionalStringField(
+      section.latestRound,
+      "funding.latestRound",
+      partialReasons,
+      "Unknown",
+    ),
+    latestRoundDate: parseOptionalStringField(
+      section.latestRoundDate,
+      "funding.latestRoundDate",
+      partialReasons,
+      "Unknown",
+    ),
   };
 }
 
 function parseTechnicalSignals(
   value: unknown,
+  partialReasons: string[],
 ): CompanyEnrichmentContent["technicalSignals"] {
-  const section = expectRecord(value, "technicalSignals");
+  const section = parseOptionalRecord(
+    value,
+    "technicalSignals",
+    partialReasons,
+  );
 
   return {
-    aiWorkloads: expectString(section.aiWorkloads, "technicalSignals.aiWorkloads"),
-    computeIntensity: expectString(
+    aiWorkloads: parseOptionalStringField(
+      section.aiWorkloads,
+      "technicalSignals.aiWorkloads",
+      partialReasons,
+      "Unknown",
+    ),
+    computeIntensity: parseOptionalStringField(
       section.computeIntensity,
       "technicalSignals.computeIntensity",
+      partialReasons,
+      "Unknown",
     ),
-    developerToolRelevance: expectString(
+    developerToolRelevance: parseOptionalStringField(
       section.developerToolRelevance,
       "technicalSignals.developerToolRelevance",
+      partialReasons,
+      "Unknown",
     ),
   };
 }
 
-function parseSalesSignals(value: unknown): CompanyEnrichmentContent["salesSignals"] {
-  const section = expectRecord(value, "salesSignals");
+function parseSalesSignals(
+  value: unknown,
+  partialReasons: string[],
+): CompanyEnrichmentContent["salesSignals"] {
+  const section = parseOptionalRecord(value, "salesSignals", partialReasons);
 
   return {
-    keyReasons: expectStringArray(section.keyReasons, "salesSignals.keyReasons"),
-    suggestedNextAction: expectString(
+    keyReasons: parseOptionalStringArrayField(
+      section.keyReasons,
+      "salesSignals.keyReasons",
+      partialReasons,
+      ["Company identity confirmed with incomplete enrichment."],
+    ),
+    suggestedNextAction: parseOptionalStringField(
       section.suggestedNextAction,
       "salesSignals.suggestedNextAction",
+      partialReasons,
+      "Review available Evidence Basis before outreach.",
     ),
   };
 }
 
-function parseConfidence(value: unknown): CompanyEnrichmentContent["confidence"] {
-  const section = expectRecord(value, "confidence");
+function parseConfidence(
+  value: unknown,
+  partialReasons: string[],
+): CompanyEnrichmentContent["confidence"] {
+  const section = parseOptionalRecord(value, "confidence", partialReasons);
 
   return {
-    evidenceConfidence: expectString(
+    evidenceConfidence: parseOptionalStringField(
       section.evidenceConfidence,
       "confidence.evidenceConfidence",
+      partialReasons,
+      "Low",
     ),
-    notes: expectString(section.notes, "confidence.notes"),
+    notes: parseOptionalStringField(
+      section.notes,
+      "confidence.notes",
+      partialReasons,
+      "No confidence notes returned.",
+    ),
   };
 }
 
-function parseOutreachSeed(value: unknown): CompanyEnrichmentContent["outreachSeed"] {
-  const section = expectRecord(value, "outreachSeed");
+function parseOutreachSeed(
+  value: unknown,
+  partialReasons: string[],
+): CompanyEnrichmentContent["outreachSeed"] {
+  const section = parseOptionalRecord(value, "outreachSeed", partialReasons);
 
   return {
-    personalizationAngles: expectStringArray(
+    personalizationAngles: parseOptionalStringArrayField(
       section.personalizationAngles,
       "outreachSeed.personalizationAngles",
+      partialReasons,
+      [],
     ),
-    warnings: expectStringArray(section.warnings, "outreachSeed.warnings"),
+    warnings: parseOptionalStringArrayField(
+      section.warnings,
+      "outreachSeed.warnings",
+      partialReasons,
+      ["Enrichment was partial; verify evidence before personalization."],
+    ),
   };
+}
+
+function parseOptionalRecord(
+  value: unknown,
+  field: string,
+  partialReasons: string[],
+): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  partialReasons.push(field);
+  return {};
+}
+
+function parseOptionalStringField(
+  value: unknown,
+  field: string,
+  partialReasons: string[],
+  fallback: string,
+): string {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+
+  partialReasons.push(field);
+  return fallback;
+}
+
+function parseOptionalStringArrayField(
+  value: unknown,
+  field: string,
+  partialReasons: string[],
+  fallback: string[],
+): string[] {
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value;
+  }
+
+  partialReasons.push(field);
+  return fallback;
+}
+
+function appendPartialNotes(notes: string, partialReasons: string[]): string {
+  const partialNote = `Parallel omitted or returned invalid non-critical fields: ${[
+    ...new Set(partialReasons),
+  ].join(", ")}.`;
+
+  if (notes === "No confidence notes returned.") {
+    return partialNote;
+  }
+
+  return `${notes} ${partialNote}`;
 }
 
 function parseEvidenceBasis(value: unknown): EvidenceBasisItem[] {

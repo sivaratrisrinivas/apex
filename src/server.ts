@@ -41,6 +41,24 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
   const draftWriter = resolveOutreachDraftWriter(options);
   console.log(`[apex] App created · enrichment worker: ${configuredEnrichmentWorker ? "configured" : "none (enrichment will be skipped)"}`);
 
+  if (configuredEnrichmentWorker) {
+    const recoverableRuns = store.listRecoverableEnrichmentRuns();
+
+    if (recoverableRuns.length > 0) {
+      console.log(`[apex] Recovering ${recoverableRuns.length} active Enrichment Run${recoverableRuns.length === 1 ? "" : "s"}`);
+    }
+
+    for (const enrichmentRun of recoverableRuns) {
+      queueMicrotask(() => {
+        void runEnrichmentRun(
+          store,
+          enrichmentRun.id,
+          configuredEnrichmentWorker,
+        );
+      });
+    }
+  }
+
   return {
     async fetch(request: Request): Promise<Response> {
       const url = new URL(request.url);
@@ -57,6 +75,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
             selectedLeadDomain,
             leadQueueSort,
             activeView: parseDashboardView(url.searchParams.get("view")),
+            liveRefreshEnabled: configuredEnrichmentWorker !== undefined,
           }),
           {
             headers: {
