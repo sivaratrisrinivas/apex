@@ -6,6 +6,7 @@ import {
   type ParallelTaskClient,
 } from "./enrichment";
 import { loadLocalEnvFile } from "./local-env";
+import { createGeminiDraftWriter, type OutreachDraftWriter } from "./gemini";
 import {
   PrototypeStore,
   type EnrichmentRun,
@@ -25,16 +26,19 @@ export type EnrichmentWorker = (
 
 export interface CreateAppOptions {
   prototypeStorePath?: string;
-  enrichmentWorker?: EnrichmentWorker;
+  enrichmentWorker?: EnrichmentWorker | null;
   parallelTaskClient?: ParallelTaskClient;
+  outreachDraftWriter?: OutreachDraftWriter | null;
   env?: Record<string, string | undefined>;
 }
 
 export function createApp(options: CreateAppOptions = {}): ApexApp {
+  const env = options.env ?? process.env;
   const store = new PrototypeStore({
     databasePath: options.prototypeStorePath,
   });
   const configuredEnrichmentWorker = resolveEnrichmentWorker(options);
+  const draftWriter = resolveOutreachDraftWriter(options);
   console.log(`[apex] App created · enrichment worker: ${configuredEnrichmentWorker ? "configured" : "none (enrichment will be skipped)"}`);
 
   return {
@@ -146,9 +150,8 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       if (url.pathname === "/outreach-drafts" && request.method === "POST") {
         console.log(`[apex] ← POST /outreach-drafts`);
         const isFormPost = isUrlEncodedFormPost(request);
-        const result = store.generateOutreachDraft(
-          await readStructuredPayload(request),
-        );
+        const payload = await readStructuredPayload(request);
+        const result = await store.generateOutreachDraft(payload, { draftWriter });
 
         if (!result.ok) {
           console.log(`[apex]   ✗ Draft rejected: ${JSON.stringify(result.body)}`);
@@ -275,6 +278,28 @@ function resolveEnrichmentWorker(
   return createEnrichmentWorker({
     taskClient: createParallelTaskClientFromEnv({ env }),
   });
+}
+
+function resolveOutreachDraftWriter(
+  options: CreateAppOptions,
+): OutreachDraftWriter | undefined {
+  if (options.outreachDraftWriter) {
+    return options.outreachDraftWriter;
+  }
+
+  if (options.outreachDraftWriter === null) {
+    return undefined; // explicitly disabled
+  }
+
+  const env = options.env ?? process.env;
+
+  if (env.GEMINI_API_KEY?.trim()) {
+    console.log(`[apex] Draft mode: GEMINI (using GEMINI_API_KEY from env)`);
+    return createGeminiDraftWriter({ apiKey: env.GEMINI_API_KEY.trim() });
+  }
+
+  console.log(`[apex] Draft mode: TEMPLATE (no GEMINI_API_KEY found)`);
+  return undefined;
 }
 
 async function runEnrichmentRun(

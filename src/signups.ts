@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 
 import { Database } from "bun:sqlite";
 
+import type { OutreachDraftWriter } from "./gemini";
 import { scoreLead, type LeadScoreBreakdown } from "./scoring";
 
 export type SignupQualification = "qualified" | "unqualified";
@@ -570,10 +571,14 @@ export class PrototypeStore {
     };
   }
 
-  generateOutreachDraft(
+  async generateOutreachDraft(
     payload: unknown,
-    generatedAt = new Date().toISOString(),
-  ): OutreachDraftGenerationResult {
+    options: {
+      generatedAt?: string;
+      draftWriter?: OutreachDraftWriter;
+    } = {},
+  ): Promise<OutreachDraftGenerationResult> {
+    const { generatedAt = new Date().toISOString(), draftWriter } = options;
     const parsedPayload = parseOutreachDraftPayload(payload);
 
     if (!parsedPayload.ok) {
@@ -607,13 +612,16 @@ export class PrototypeStore {
       };
     }
 
+    let draftContent;
+    if (draftWriter) {
+      draftContent = await draftWriter(lead.companyEnrichment);
+    } else {
+      draftContent = buildTemplateDraftContent(lead.companyEnrichment);
+    }
+
     return {
       ok: true,
-      outreachDraft: this.insertOutreachDraft(
-        lead,
-        buildOutreachDraftContent(lead.companyEnrichment),
-        generatedAt,
-      ),
+      outreachDraft: this.insertOutreachDraft(lead, draftContent, generatedAt),
     };
   }
 
@@ -1415,7 +1423,7 @@ function formatCompanyName(normalizedCompanyDomain: string): string {
     .join(" ");
 }
 
-function buildOutreachDraftContent(
+function buildTemplateDraftContent(
   companyEnrichment: CompanyEnrichment,
 ): Omit<
   OutreachDraft,
