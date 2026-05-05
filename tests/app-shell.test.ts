@@ -23,4 +23,15 @@ describe("Apex Dashboard shell", () => {
 
     expect(response.status).toBe(404);
   });
+
+  test("serves the generated focus surface asset", async () => {
+    const app = createApp();
+
+    const response = await app.fetch(
+      new Request("http://localhost/assets/apex-focus-surface.png"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+  });
 });

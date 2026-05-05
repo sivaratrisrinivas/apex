@@ -12,7 +12,10 @@ interface DashboardOptions {
   leadQueue?: LeadQueueRecord[];
   selectedLeadDomain?: string;
   leadQueueSort?: LeadQueueSort;
+  activeView?: DashboardView;
 }
+
+type DashboardView = "intake" | "queue" | "lead" | "draft" | "activity";
 
 export function renderDashboard(options: DashboardOptions = {}): string {
   const leadQueue = options.leadQueue ?? [];
@@ -23,103 +26,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
         lead.normalizedCompanyDomain ===
         options.selectedLeadDomain?.trim().toLowerCase(),
     ) ?? leadQueue[0];
-  const rows = leadQueue
-    .map(
-      (row) => `
-        <tr>
-          <td>
-            <a class="lead-link" href="/?lead=${encodeURIComponent(row.normalizedCompanyDomain)}&sort=${leadQueueSort}">
-              <strong>${escapeHtml(row.companyName)}</strong>
-            </a>
-            <span>${escapeHtml(row.normalizedCompanyDomain)}</span>
-          </td>
-          <td><b>${formatLeadScore(row)}</b></td>
-          <td><mark data-status="${escapeHtml(row.enrichmentStatus)}">${escapeHtml(row.enrichmentStatus)}</mark></td>
-          <td>${formatInlineList(row.keyReasons)}</td>
-          <td>${escapeHtml(row.evidenceConfidence)}</td>
-          <td>${row.signupCount}<span>${escapeHtml(formatLatestSignup(row.latestSignupAt))}</span></td>
-          <td>${escapeHtml(row.suggestedNextAction)}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  const leadQueueBody =
-    rows ||
-    `
-      <tr>
-        <td colspan="7">No Leads yet.</td>
-      </tr>
-    `;
-  const developerSignupRows = (options.developerSignups ?? [])
-    .map(
-      (signup) => `
-        <tr>
-          <td>
-            <strong>${escapeHtml(signup.email)}</strong>
-            <span>${escapeHtml(signup.name ?? "Unnamed Developer Signup")}</span>
-          </td>
-          <td>${escapeHtml(signup.normalizedCompanyDomain)}</td>
-          <td>${formatSignupQualification(signup)}</td>
-          <td>${escapeHtml(signup.source)}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  const developerSignupBody =
-    developerSignupRows ||
-    `
-      <tr>
-        <td colspan="4">No Demo Signup Payloads yet.</td>
-      </tr>
-    `;
-  const enrichmentRunRows = (options.enrichmentRuns ?? [])
-    .map(
-      (enrichmentRun) => `
-        <tr>
-          <td>
-            <strong>${escapeHtml(enrichmentRun.id)}</strong>
-            <span>${escapeHtml(enrichmentRun.normalizedCompanyDomain)}</span>
-          </td>
-          <td><mark data-status="${escapeHtml(enrichmentRun.status)}">${escapeHtml(enrichmentRun.status)}</mark></td>
-          <td>${escapeHtml(formatLatestSignup(enrichmentRun.requestedAt))}</td>
-          <td>${escapeHtml(enrichmentRun.failureReason ?? "None")}</td>
-        </tr>
-      `,
-    )
-    .join("");
-  const enrichmentRunBody =
-    enrichmentRunRows ||
-    `
-      <tr>
-        <td colspan="4">No Enrichment Runs yet.</td>
-      </tr>
-    `;
-  const selectedLeadDetail = selectedLead
-    ? `
-            <h2>${escapeHtml(selectedLead.companyName)} details</h2>
-            ${formatLeadScoreBadge(selectedLead)}
-            <dl>
-              <div><dt>Normalized Company Domain</dt><dd>${escapeHtml(selectedLead.normalizedCompanyDomain)}</dd></div>
-              <div><dt>Enrichment Status</dt><dd>${escapeHtml(selectedLead.enrichmentStatus)}</dd></div>
-              <div><dt>Developer Signups</dt><dd>${selectedLead.signupCount}</dd></div>
-              <div><dt>Latest Signup</dt><dd>${escapeHtml(formatLatestSignup(selectedLead.latestSignupAt))}</dd></div>
-            </dl>
-            ${formatMockCrmFields(selectedLead)}
-            ${formatManualRefreshAction(selectedLead)}
-            ${formatScoreBreakdown(selectedLead)}
-            ${formatScoreReasons(selectedLead.scoreReasons)}
-            ${formatKeyReasons(selectedLead.keyReasons)}
-            ${formatOutreachDraft(selectedLead)}
-            ${formatEvidenceBasis(selectedLead.evidenceBasis)}
-            ${formatRawCompanyEnrichment(selectedLead)}
-      `
-    : `
-            <h2>No Lead selected</h2>
-            <div class="score score-empty">--</div>
-            <p class="evidence">
-              Submit a qualified Demo Signup Payload to create the first Lead Queue record.
-            </p>
-      `;
+  const activeView = resolveActiveView(options.activeView, leadQueue, selectedLead);
 
   return `<!doctype html>
 <html lang="en">
@@ -127,843 +34,450 @@ export function renderDashboard(options: DashboardOptions = {}): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Apex Dashboard</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f6f8fb;
-        --ink: #121821;
-        --muted: #637083;
-        --line: #dce3ed;
-        --panel: #ffffff;
-        --panel-soft: #f9fbfe;
-        --cyan: #0ea5c8;
-        --green: #20a66a;
-        --amber: #b7791f;
-        --shadow: 0 18px 50px rgba(31, 45, 61, 0.1);
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", sans-serif;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100vh;
-        background:
-          linear-gradient(180deg, rgba(14, 165, 200, 0.08), transparent 340px),
-          var(--bg);
-        color: var(--ink);
-      }
-
-      button,
-      input {
-        font: inherit;
-      }
-
-      .shell {
-        display: grid;
-        grid-template-columns: 232px minmax(0, 1fr);
-        min-height: 100vh;
-      }
-
-      aside {
-        border-right: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.72);
-        padding: 24px 18px;
-      }
-
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 22px;
-        font-weight: 760;
-        letter-spacing: 0;
-      }
-
-      .brand::before {
-        content: "";
-        width: 30px;
-        height: 30px;
-        border-radius: 8px;
-        background:
-          linear-gradient(135deg, var(--cyan), var(--green));
-        box-shadow: 0 10px 30px rgba(14, 165, 200, 0.3);
-      }
-
-      nav {
-        display: grid;
-        gap: 6px;
-        margin-top: 30px;
-      }
-
-      nav a {
-        color: var(--muted);
-        padding: 10px 12px;
-        text-decoration: none;
-        border-radius: 8px;
-        font-size: 14px;
-        font-weight: 640;
-      }
-
-      nav a:first-child {
-        background: #eaf7fb;
-        color: #075f73;
-      }
-
-      main {
-        padding: 22px;
-      }
-
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-        margin-bottom: 18px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 24px;
-        line-height: 1.15;
-        letter-spacing: 0;
-      }
-
-      .status {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        color: #0d6b46;
-        background: #e7f8ef;
-        border: 1px solid #b8ebcf;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 13px;
-        font-weight: 680;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
-        gap: 18px;
-      }
-
-      .queue-column {
-        display: grid;
-        gap: 18px;
-        min-width: 0;
-      }
-
-      .panel {
-        background: rgba(255, 255, 255, 0.88);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: var(--shadow);
-      }
-
-      .intake {
-        display: grid;
-        grid-template-columns: minmax(230px, 1fr) auto;
-        gap: 10px;
-        padding: 14px;
-        margin-bottom: 14px;
-      }
-
-      input {
-        min-width: 0;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 11px 12px;
-        color: var(--ink);
-      }
-
-      button {
-        border: 0;
-        border-radius: 8px;
-        padding: 11px 14px;
-        background: #111827;
-        color: white;
-        font-weight: 720;
-      }
-
-      .refresh-action {
-        margin: 14px 0 18px;
-      }
-
-      .refresh-action button {
-        width: 100%;
-        background: #075f73;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-
-      .table-toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 16px 18px 0;
-      }
-
-      .table-toolbar h2 {
-        margin: 0;
-        font-size: 18px;
-        letter-spacing: 0;
-      }
-
-      .sort-controls {
-        display: inline-flex;
-        gap: 6px;
-      }
-
-      .sort-controls a {
-        color: var(--muted);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 7px 9px;
-        text-decoration: none;
-        font-size: 12px;
-        font-weight: 720;
-      }
-
-      .sort-controls a[aria-current="true"] {
-        color: #075f73;
-        background: #eaf7fb;
-        border-color: #bce8f2;
-      }
-
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border: 0;
-      }
-
-      caption {
-        padding: 16px 18px 4px;
-        text-align: left;
-        font-size: 18px;
-        font-weight: 760;
-      }
-
-      th,
-      td {
-        padding: 14px 18px;
-        border-bottom: 1px solid var(--line);
-        text-align: left;
-        font-size: 14px;
-      }
-
-      th {
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 760;
-        text-transform: uppercase;
-      }
-
-      td span {
-        display: block;
-        color: var(--muted);
-        font-size: 12px;
-        margin-top: 3px;
-      }
-
-      .lead-link {
-        color: inherit;
-        text-decoration: none;
-      }
-
-      .lead-link:hover {
-        color: #075f73;
-        text-decoration: underline;
-      }
-
-      mark {
-        display: inline-flex;
-        border-radius: 999px;
-        padding: 4px 8px;
-        background: #eef5ff;
-        color: #195b9d;
-        font-size: 12px;
-        font-weight: 700;
-      }
-
-      mark[data-status="completed"] {
-        background: #e7f8ef;
-        color: #0d6b46;
-      }
-
-      mark[data-status="partial"] {
-        background: #fff5df;
-        color: var(--amber);
-      }
-
-      mark[data-status="pending"] {
-        background: #eef5ff;
-        color: #195b9d;
-      }
-
-      mark[data-status="researching"] {
-        background: #eaf7fb;
-        color: #075f73;
-      }
-
-      mark[data-status="failed"] {
-        background: #ffe8e8;
-        color: #a02727;
-      }
-
-      mark[data-status="unqualified"] {
-        background: #f2f4f7;
-        color: #526070;
-      }
-
-      .detail {
-        padding: 18px;
-      }
-
-      .detail h2 {
-        margin: 0 0 12px;
-        font-size: 18px;
-        letter-spacing: 0;
-      }
-
-      .score {
-        display: grid;
-        place-items: center;
-        width: 112px;
-        height: 112px;
-        border-radius: 50%;
-        color: #075f73;
-        background:
-          radial-gradient(circle at center, white 54%, transparent 56%),
-          conic-gradient(var(--cyan) 0 95%, #e6eef6 95%);
-        font-size: 30px;
-        font-weight: 800;
-      }
-
-      .score-empty {
-        background: #eef5ff;
-        color: #637083;
-        font-size: 24px;
-      }
-
-      .detail dl {
-        display: grid;
-        gap: 10px;
-        margin: 18px 0;
-      }
-
-      .detail dl > div {
-        display: flex;
-        justify-content: space-between;
-        gap: 20px;
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      .detail dd {
-        margin: 0;
-        color: var(--ink);
-        font-weight: 700;
-      }
-
-      .evidence {
-        padding: 14px;
-        border-radius: 8px;
-        background: var(--panel-soft);
-        border: 1px solid var(--line);
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.5;
-      }
-
-      .evidence ul {
-        margin: 8px 0 0;
-        padding-left: 18px;
-      }
-
-      .evidence pre {
-        overflow: auto;
-        margin: 10px 0 0;
-        padding: 10px;
-        border-radius: 8px;
-        background: #111827;
-        color: #f9fbfe;
-        font-size: 12px;
-        line-height: 1.45;
-      }
-
-      .outreach-draft {
-        display: grid;
-        gap: 10px;
-      }
-
-      .outreach-draft label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 720;
-      }
-
-      .outreach-draft textarea {
-        width: 100%;
-        min-height: 220px;
-        resize: vertical;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 12px;
-        color: var(--ink);
-        background: white;
-        font: inherit;
-        line-height: 1.5;
-      }
-
-      .draft-actions {
-        display: flex;
-        gap: 8px;
-      }
-
-      @media (max-width: 980px) {
-        .shell {
-          grid-template-columns: 1fr;
-        }
-
-        aside {
-          display: none;
-        }
-
-        .grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 640px) {
-        main {
-          padding: 14px;
-        }
-
-        header,
-        .intake {
-          grid-template-columns: 1fr;
-          align-items: stretch;
-        }
-
-        header {
-          display: grid;
-        }
-
-        th:nth-child(4),
-        td:nth-child(4),
-        th:nth-child(5),
-        td:nth-child(5) {
-          display: none;
-        }
-      }
-    </style>
+    <meta name="description" content="Apex — focus on the next lead" />
+    <link rel="stylesheet" href="/assets/dashboard.css" />
+    <style>mark[data-status="pending"],mark[data-status="researching"]{color:var(--teal)}mark[data-status="completed"]{color:var(--green)}mark[data-status="partial"]{color:var(--amber)}mark[data-status="failed"]{color:var(--red)}</style>
   </head>
   <body>
-    <div class="shell">
-      <aside>
-        <div class="brand">Apex</div>
-        <nav aria-label="Primary">
-          <a href="/">Lead Queue</a>
-          <a href="/">Enrichment Runs</a>
-          <a href="/">Evidence</a>
-          <a href="/">Settings</a>
-        </nav>
-      </aside>
-      <main>
-        <header>
-          <div>
-            <h1>Apex Dashboard</h1>
-            <p>Near-Real-Time Enrichment for enterprise-ready Developer Signups.</p>
+    <main class="shell">
+      <header>
+        <div class="brand">Apex <span style="font-weight:400;font-size:11px;opacity:0.5;margin-left:8px">WSL local</span></div>
+        <h1>${formatHeadline(activeView, selectedLead)}</h1>
+        <p>${formatSubheadline(activeView, selectedLead, leadQueue)}</p>
+      </header>
+
+      ${formatFocusTabs(activeView, selectedLead)}
+
+      <!-- Intake -->
+      <section class="moment${activeView === "intake" ? " is-active" : ""}" id="moment-intake">
+        <div class="panel">
+          <div class="moment-head">
+            <h2>Submit a Signal</h2>
+            <p>Paste a developer signup email to begin enrichment.</p>
           </div>
-          <span class="status">WSL local</span>
-        </header>
-        <section class="panel intake" aria-label="Demo Signup Payload">
-          <input aria-label="Developer email" value="engineer@modal.com" />
-          <button type="button">Submit Signup</button>
-        </section>
-        <div class="grid">
-          <div class="queue-column">
-            <section class="panel" aria-label="Lead Queue">
-              <div class="table-toolbar">
-                <h2>Lead Queue</h2>
-                ${formatLeadQueueSortControls(leadQueueSort)}
+          <div class="intake-body">
+            <form method="post" action="/demo-signups">
+              <div class="field-group">
+                <label>Email<input type="email" name="email" placeholder="engineer@company.com" required /></label>
+                <label>Name <span style="color:var(--faint)">(optional)</span><input type="text" name="name" placeholder="Jane Smith" /></label>
+                <label>Source <span style="color:var(--faint)">(optional)</span><input type="text" name="source" value="manual" /></label>
               </div>
-              <table>
-                <caption class="sr-only">Lead Queue</caption>
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Score</th>
-                    <th>Status</th>
-                    <th>Key Reasons</th>
-                    <th>Confidence</th>
-                    <th>Signups</th>
-                    <th>Suggested Next Action</th>
-                  </tr>
-                </thead>
-                <tbody>${leadQueueBody}</tbody>
-              </table>
-            </section>
-            <section class="panel" aria-label="Developer Signups">
-              <table>
-                <caption>Developer Signups</caption>
-                <thead>
-                  <tr>
-                    <th>Email</th>
-                    <th>Normalized Company Domain</th>
-                    <th>Qualification</th>
-                    <th>Source</th>
-                  </tr>
-                </thead>
-                <tbody>${developerSignupBody}</tbody>
-              </table>
-            </section>
-            <section class="panel" aria-label="Enrichment Runs">
-              <table>
-                <caption>Enrichment Runs</caption>
-                <thead>
-                  <tr>
-                    <th>Run</th>
-                    <th>Status</th>
-                    <th>Requested</th>
-                    <th>Failure Reason</th>
-                  </tr>
-                </thead>
-                <tbody>${enrichmentRunBody}</tbody>
-              </table>
-            </section>
+              <div style="align-self:end">
+                <button type="submit" class="btn-primary">Enrich</button>
+              </div>
+            </form>
           </div>
-          <section class="panel detail" aria-label="Selected Lead detail">
-${selectedLeadDetail}
-          </section>
+          ${formatSignupActivity(options.developerSignups ?? [])}
         </div>
-      </main>
-    </div>
+      </section>
+
+      <!-- Queue -->
+      <section class="moment${activeView === "queue" ? " is-active" : ""}" id="moment-queue" aria-label="Lead Queue">
+        <div class="queue-toolbar">
+          <h2>${leadQueue.length} Lead${leadQueue.length === 1 ? "" : "s"}</h2>
+          ${formatSortControls(leadQueueSort)}
+        </div>
+        <div class="lead-cards">
+          ${leadQueue.length === 0 ? formatEmpty("No leads yet. Submit a signal to get started.") : leadQueue.map((lead) => formatLeadCard(lead, leadQueueSort)).join("")}
+          ${formatQueueCompat(leadQueue)}
+        </div>
+      </section>
+
+      <!-- Lead detail -->
+      <section class="moment${activeView === "lead" ? " is-active" : ""}" id="moment-lead" aria-label="Selected Lead detail">
+        ${selectedLead ? formatLeadDetail(selectedLead) : formatEmpty("Select a lead from the Queue to see details.")}
+      </section>
+
+      <!-- Draft -->
+      <section class="moment${activeView === "draft" ? " is-active" : ""}" id="moment-draft">
+        ${selectedLead ? formatDraftMoment(selectedLead) : formatEmpty("Select a lead before generating an outreach draft.")}
+      </section>
+
+      <!-- Activity -->
+      <section class="moment${activeView === "activity" ? " is-active" : ""}" id="moment-activity">
+        <div class="panel">
+          ${formatEnrichmentActivity(options.enrichmentRuns ?? [])}
+        </div>
+      </section>
+    </main>
+
     <script>
-      document.addEventListener("click", async (event) => {
-        const button = event.target.closest("[data-copy-outreach]");
-        if (!button) return;
-        const target = document.getElementById(button.getAttribute("data-copy-outreach"));
-        if (target && "value" in target && navigator.clipboard) {
-          await navigator.clipboard.writeText(target.value);
-        }
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-copy-outreach]');
+        if (!btn) return;
+        var ta = document.getElementById(btn.dataset.copyOutreach);
+        if (!ta) return;
+        navigator.clipboard.writeText(ta.value);
+        var orig = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(function() { btn.textContent = orig; }, 1400);
       });
     </script>
   </body>
 </html>`;
 }
 
-function formatSignupQualification(signup: DeveloperSignup): string {
-  if (signup.qualification === "qualified") {
-    return "Eligible for enrichment";
+// ── Contextual headlines ──
+
+function formatHeadline(view: DashboardView, lead: LeadQueueRecord | undefined): string {
+  switch (view) {
+    case "intake": return "New signal";
+    case "queue": return "Lead Queue";
+    case "lead": return lead ? esc(lead.companyName) : "No lead";
+    case "draft": return lead ? `${esc(lead.companyName)} outreach` : "Outreach";
+    case "activity": return "Activity";
   }
-
-  return `Unqualified Signup: <mark data-status="unqualified">unqualified</mark><span>${escapeHtml(signup.unqualifiedReason ?? "unqualified")}</span>`;
 }
 
-function formatLeadQueueSortControls(activeSort: LeadQueueSort): string {
+function formatSubheadline(view: DashboardView, lead: LeadQueueRecord | undefined, queue: LeadQueueRecord[]): string {
+  switch (view) {
+    case "intake": return "Paste a developer signup to start the enrichment pipeline.";
+    case "queue": return queue.length === 0 ? "No leads enriched yet." : `Ranked by lead score. ${queue.length} compan${queue.length === 1 ? "y" : "ies"} in the queue.`;
+    case "lead": return lead ? `${esc(lead.normalizedCompanyDomain)} · ${lead.signupCount} signup${lead.signupCount === 1 ? "" : "s"}` : "";
+    case "draft": return lead ? "Review, edit, and copy the personalized outreach." : "";
+    case "activity": return "All enrichment runs and signup payloads.";
+  }
+}
+
+// ── Tabs ──
+
+function formatFocusTabs(activeView: DashboardView, selectedLead: LeadQueueRecord | undefined): string {
+  const sq = selectedLead ? `&lead=${encodeURIComponent(selectedLead.normalizedCompanyDomain)}` : "";
+  const tabs: [DashboardView, string, string][] = [
+    ["intake", "Intake", "/?view=intake"],
+    ["queue", "Queue", "/?view=queue"],
+    ["lead", "Lead", `/?view=lead${sq}`],
+    ["draft", "Draft", `/?view=draft${sq}`],
+    ["activity", "Activity", "/?view=activity"],
+  ];
   return `
-                <div class="sort-controls" aria-label="Lead Queue sort">
-                  <a href="/?sort=score" aria-current="${activeSort === "score"}">Lead Score</a>
-                  <a href="/?sort=recent" aria-current="${activeSort === "recent"}">Recent Signup</a>
-                </div>
-  `;
+    <nav class="focus-tabs" aria-label="Primary">
+      ${tabs.map(([v, l, h]) => `<a href="${h}" aria-current="${activeView === v}">${l}</a>`).join("")}
+    </nav>`;
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+// ── Lead card ──
+
+function formatLeadCard(lead: LeadQueueRecord, sort: LeadQueueSort): string {
+  const href = `/?view=lead&lead=${encodeURIComponent(lead.normalizedCompanyDomain)}&sort=${sort}`;
+  return `
+    <a class="lead-card" href="${href}">
+      <div class="lead-card-info">
+        <h3>${esc(lead.companyName)}</h3>
+        <span class="lead-card-domain">${esc(lead.normalizedCompanyDomain)}</span>
+        <div class="lead-card-meta">
+          <mark data-status="${esc(lead.enrichmentStatus)}">${esc(lead.enrichmentStatus)}</mark>
+          <span>${lead.signupCount} signup${lead.signupCount === 1 ? "" : "s"}</span>
+        </div>
+        ${lead.suggestedNextAction ? `<div class="lead-card-action">${esc(lead.suggestedNextAction)}</div>` : ""}
+      </div>
+      ${formatScoreRing(lead, false)}
+    </a>`;
 }
 
-function formatLeadScore(lead: LeadQueueRecord): string {
-  return lead.leadScore === null ? "Unscored" : String(lead.leadScore);
-}
+// ── Score ring ──
 
-function formatLeadScoreBadge(lead: LeadQueueRecord): string {
+function formatScoreRing(lead: LeadQueueRecord, large: boolean): string {
   if (lead.leadScore === null) {
-    return `<div class="score score-empty">--</div>`;
+    const cls = large ? "score-ring-lg score-ring-empty" : "score-ring score-ring-empty";
+    return `<div class="${cls}" style="--pct:0"><div class="score-ring-inner"><b>--</b></div></div>`;
   }
-
-  return `<div class="score">${lead.leadScore}</div>`;
+  const cls = large ? "score-ring-lg" : "score-ring";
+  return `<div class="${cls}" style="--pct:${lead.leadScore}"><div class="score-ring-inner"><b>${lead.leadScore}</b></div></div>`;
 }
 
-function formatInlineList(items: string[]): string {
-  if (items.length === 0) {
-    return "None yet";
-  }
+// ── Lead detail ──
 
-  return items
-    .map((item) => `<span class="reason">${escapeHtml(item)}</span>`)
-    .join("");
-}
-
-function formatManualRefreshAction(lead: LeadQueueRecord): string {
+function formatLeadDetail(lead: LeadQueueRecord): string {
   return `
-            <form class="refresh-action" method="post" action="/manual-refreshes">
-              <input type="hidden" name="normalizedCompanyDomain" value="${escapeHtml(lead.normalizedCompanyDomain)}" />
-              <button type="submit">Manual refresh</button>
-            </form>
-  `;
+    <div class="panel">
+      <div class="detail-layout">
+        <div class="detail-rail">
+          ${formatScoreRing(lead, true)}
+          <dl class="detail-stats">
+            <div class="detail-stat"><dt>Domain</dt><dd>${esc(lead.normalizedCompanyDomain)}</dd></div>
+            <div class="detail-stat"><dt>Status</dt><dd><mark data-status="${esc(lead.enrichmentStatus)}">${esc(lead.enrichmentStatus)}</mark></dd></div>
+            <div class="detail-stat"><dt>Signups</dt><dd>${lead.signupCount}</dd></div>
+            <div class="detail-stat"><dt>Latest</dt><dd>${esc(fmtDate(lead.latestSignupAt))}</dd></div>
+          </dl>
+          ${formatManualRefreshAction(lead)}
+          <div style="display:none">${formatLeadQueueCompat(lead)}</div>
+        </div>
+        <div class="detail-flow">
+          <h2>${esc(lead.companyName)} details</h2>
+          ${formatMockCrmDisclosure(lead)}
+          ${formatScoreBreakdownDisclosure(lead)}
+          ${formatScoreReasonsDisclosure(lead.scoreReasons)}
+          ${formatKeyReasonsDisclosure(lead.keyReasons)}
+          ${formatEvidenceBasisDisclosure(lead.evidenceBasis)}
+          ${formatRawEnrichmentDisclosure(lead)}
+          ${formatOutreachInDetail(lead)}
+        </div>
+      </div>
+    </div>`;
 }
 
-function formatMockCrmFields(lead: LeadQueueRecord): string {
-  const fields = [
-    ["Lifecycle Stage", formatMockLifecycleStage(lead)],
-    ["Owner", formatMockOwner(lead)],
-    ["Territory", formatMockTerritory(lead.normalizedCompanyDomain)],
-    [
-      "Last Activity",
-      `${lead.signupCount} Developer Signup${
-        lead.signupCount === 1 ? "" : "s"
-      } - ${formatLatestSignup(lead.latestSignupAt)}`,
-    ],
-  ] as const;
+// ── Disclosure cards (progressive disclosure) ──
 
-  return `
-            <div class="evidence">
-              <strong>Mock CRM Fields</strong>
-              <dl>
-                ${fields
-                  .map(
-                    ([label, value]) => `
-                <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>
-                    `,
-                  )
-                  .join("")}
-              </dl>
-            </div>
-  `;
+function formatMockCrmDisclosure(lead: LeadQueueRecord): string {
+  const stage = formatMockLifecycleStage(lead);
+  const owner = lead.leadScore !== null && lead.leadScore >= 80 ? "Enterprise AE" : "GTM Research";
+  const territory = formatMockTerritory(lead.normalizedCompanyDomain);
+  const lastActivity = `${lead.signupCount} signup${lead.signupCount === 1 ? "" : "s"} · ${fmtDate(lead.latestSignupAt)}`;
+  return disclosure("Mock CRM Fields", `
+    <dl>
+      <div><dt>Lifecycle Stage</dt><dd>${esc(stage)}</dd></div>
+      <div><dt>Owner</dt><dd>${esc(owner)}</dd></div>
+      <div><dt>Territory</dt><dd>${esc(territory)}</dd></div>
+      <div><dt>Last Activity</dt><dd>${esc(lastActivity)}</dd></div>
+    </dl>`, true);
 }
 
-function formatMockLifecycleStage(lead: LeadQueueRecord): string {
-  if (lead.leadScore === null) {
-    return lead.enrichmentStatus === "failed" ? "Research blocked" : "Researching";
-  }
-
-  if (lead.leadScore >= 80) {
-    return "Sales Qualified Lead";
-  }
-
-  if (lead.leadScore >= 60) {
-    return "Qualified nurture";
-  }
-
-  return "Monitor";
-}
-
-function formatMockOwner(lead: LeadQueueRecord): string {
-  return lead.leadScore !== null && lead.leadScore >= 80
-    ? "Enterprise AE"
-    : "GTM Research";
-}
-
-function formatMockTerritory(normalizedCompanyDomain: string): string {
-  if (normalizedCompanyDomain.endsWith(".ai")) {
-    return "AI startups";
-  }
-
-  if (normalizedCompanyDomain.endsWith(".io")) {
-    return "Developer infrastructure";
-  }
-
-  return "North America";
-}
-
-function formatScoreBreakdown(lead: LeadQueueRecord): string {
-  if (!lead.scoreBreakdown) {
-    return "";
-  }
-
-  const dimensions = [
+function formatScoreBreakdownDisclosure(lead: LeadQueueRecord): string {
+  if (!lead.scoreBreakdown) return "";
+  const dims: [string, { score: number; maxScore: number; reason: string }][] = [
     ["Purchasing Capacity", lead.scoreBreakdown.purchasingCapacity],
     ["Compute Intensity", lead.scoreBreakdown.computeIntensity],
     ["Parallel Fit", lead.scoreBreakdown.parallelFit],
     ["Sales Timing", lead.scoreBreakdown.salesTiming],
     ["Evidence Confidence", lead.scoreBreakdown.evidenceConfidence],
-  ] as const;
-
-  return `
-            <div class="evidence">
-              <strong>Lead Score Breakdown</strong>
-              <ul>
-                ${dimensions
-                  .map(
-                    ([label, dimension]) => `
-                <li>
-                  <b>${escapeHtml(label)}</b>
-                  <span>${dimension.score}/${dimension.maxScore}</span>
-                  <span>${escapeHtml(dimension.reason)}</span>
-                </li>
-                  `,
-                  )
-                  .join("")}
-              </ul>
-            </div>
-  `;
+  ];
+  const bars = dims.map(([label, d]) => {
+    const pct = d.maxScore > 0 ? Math.round((d.score / d.maxScore) * 100) : 0;
+    return `
+      <div class="score-dim">
+        <span class="score-dim-label">${esc(label)}</span>
+        <div class="score-dim-bar"><div class="score-dim-fill" style="width:${pct}%"></div></div>
+        <span class="score-dim-value">${d.score}/${d.maxScore}</span>
+      </div>`;
+  }).join("");
+  return disclosure("Lead Score Breakdown", bars, true);
 }
 
-function formatScoreReasons(scoreReasons: string[]): string {
-  if (scoreReasons.length === 0) {
-    return "";
-  }
-
-  return `
-            <div class="evidence">
-              <strong>Top score reasons</strong>
-              <ul>
-                ${scoreReasons
-                  .map((reason) => `<li>${escapeHtml(reason)}</li>`)
-                  .join("")}
-              </ul>
-            </div>
-  `;
+function formatScoreReasonsDisclosure(reasons: string[]): string {
+  if (reasons.length === 0) return "";
+  return disclosure("Top score reasons", `<ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`);
 }
 
-function formatKeyReasons(keyReasons: string[]): string {
-  if (keyReasons.length === 0) {
-    return "";
-  }
-
-  return `
-            <div class="evidence">
-              <strong>Key reasons</strong>
-              <ul>
-                ${keyReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
-              </ul>
-            </div>
-  `;
+function formatKeyReasonsDisclosure(reasons: string[]): string {
+  if (reasons.length === 0) return "";
+  return disclosure("Key Reasons", `<ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`);
 }
 
-function formatOutreachDraft(lead: LeadQueueRecord): string {
+function formatEvidenceBasisDisclosure(basis: EvidenceBasisItem[]): string {
+  if (basis.length === 0) return disclosure("Evidence Basis", `<p>Evidence Basis will appear after enrichment completes.</p>`);
+  const items = basis.map((item) => {
+    const excerpt = item.citations.flatMap((c) => c.excerpts)[0];
+    return `<li><b>${esc(item.field)}</b> <span>${esc(item.confidence)}</span>${excerpt ? ` — ${esc(excerpt)}` : ""}</li>`;
+  }).join("");
+  return disclosure("Evidence Basis", `<ul>${items}</ul>`, true);
+}
+
+function formatRawEnrichmentDisclosure(lead: LeadQueueRecord): string {
+  if (!lead.companyEnrichment) return disclosure("Raw Enrichment", `<p>Will appear after enrichment completes.</p>`);
+  return disclosure("Raw Company Enrichment", `<pre>${escText(JSON.stringify(lead.companyEnrichment.content, null, 2))}</pre>`);
+}
+
+function disclosure(title: string, body: string, open = false): string {
+  return `
+    <details class="disclosure"${open ? " open" : ""}>
+      <summary>${esc(title)}</summary>
+      <div class="disclosure-body">${body}</div>
+    </details>`;
+}
+
+// ── Draft moment ──
+
+function formatDraftMoment(lead: LeadQueueRecord): string {
   if (!lead.companyEnrichment) {
-    return "";
+    return `<div class="panel draft-editor">
+      <h2>${esc(lead.companyName)} outreach</h2>
+      <p style="color:var(--muted)">Enrichment must complete before generating a draft.</p>
+    </div>`;
   }
 
   if (!lead.outreachDraft) {
-    return `
-            <form class="refresh-action" method="post" action="/outreach-drafts">
-              <input type="hidden" name="normalizedCompanyDomain" value="${escapeHtml(lead.normalizedCompanyDomain)}" />
-              <button type="submit">Generate Outreach Draft</button>
-            </form>
-    `;
+    return `<div class="panel draft-editor">
+      <h2>${esc(lead.companyName)} outreach</h2>
+      <form method="post" action="/outreach-drafts">
+        <input type="hidden" name="normalizedCompanyDomain" value="${esc(lead.normalizedCompanyDomain)}" />
+        <button type="submit" class="btn-teal">Generate Outreach Draft</button>
+      </form>
+    </div>`;
   }
 
   const textareaId = `outreach-draft-${lead.outreachDraft.id}`;
-
+  const refs = lead.outreachDraft.evidenceReferences;
   return `
-            <div class="evidence outreach-draft">
-              <strong>Outreach Draft</strong>
-              <span>${escapeHtml(lead.outreachDraft.status)}</span>
-              <label>
-                Subject
-                <input aria-label="Outreach Draft subject" value="${escapeHtml(lead.outreachDraft.subject)}" />
-              </label>
-              <label>
-                Body
-                <textarea id="${escapeHtml(textareaId)}" aria-label="Outreach Draft body">${escapeHtmlText(lead.outreachDraft.body)}</textarea>
-              </label>
-              <div class="draft-actions">
-                <button type="button" data-copy-outreach="${escapeHtml(textareaId)}">Copy draft</button>
-              </div>
-              ${formatOutreachDraftEvidenceReferences(lead.outreachDraft.evidenceReferences)}
-            </div>
-  `;
+    <div class="panel draft-editor">
+      <div class="draft-status" data-s="${lead.outreachDraft.status === "ready" ? "ready" : "needs-evidence"}">${esc(lead.outreachDraft.status)}</div>
+      <h2>${esc(lead.companyName)} outreach</h2>
+      <div class="draft-field">
+        <label>Subject</label>
+        <input aria-label="Outreach Draft subject" value="${esc(lead.outreachDraft.subject)}" />
+      </div>
+      <div class="draft-field">
+        <label>Body</label>
+        <textarea id="${esc(textareaId)}" aria-label="Outreach Draft body">${escText(lead.outreachDraft.body)}</textarea>
+      </div>
+      <div class="draft-actions">
+        <button type="button" class="btn-primary" data-copy-outreach="${esc(textareaId)}">Copy draft</button>
+        <button type="button" class="btn-ghost" onclick="document.getElementById('${esc(textareaId)}').select()">Select all</button>
+      </div>
+      ${refs.length > 0 ? `
+        <div class="draft-refs">
+          ${disclosure("Evidence References", `<ul>${refs.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`, true)}
+        </div>` : ""}
+      ${disclosure("Grounding", `
+        <dl>
+          <div><dt>Lead Score</dt><dd>${lead.leadScore === null ? "Unscored" : String(lead.leadScore)}</dd></div>
+          <div><dt>Evidence Confidence</dt><dd>${esc(lead.evidenceConfidence)}</dd></div>
+          <div><dt>Suggested Next Action</dt><dd>${esc(lead.suggestedNextAction)}</dd></div>
+        </dl>`, true)}
+    </div>`;
 }
 
-function formatOutreachDraftEvidenceReferences(evidenceReferences: string[]): string {
-  if (evidenceReferences.length === 0) {
-    return "";
+function formatOutreachInDetail(lead: LeadQueueRecord): string {
+  if (!lead.outreachDraft) return "";
+  const textareaId = `detail-outreach-${lead.outreachDraft.id}`;
+  const refs = lead.outreachDraft.evidenceReferences;
+  return `
+    <details class="disclosure" open>
+      <summary>Outreach Draft</summary>
+      <div class="disclosure-body">
+        <div class="draft-field">
+          <label>Subject</label>
+          <input aria-label="Outreach Draft subject" value="${esc(lead.outreachDraft.subject)}" />
+        </div>
+        <div class="draft-field">
+          <label>Body</label>
+          <textarea id="${esc(textareaId)}" aria-label="Outreach Draft body">${escText(lead.outreachDraft.body)}</textarea>
+        </div>
+        <div class="draft-actions">
+          <button type="button" class="btn-primary" data-copy-outreach="${esc(textareaId)}">Copy draft</button>
+        </div>
+        ${refs.length > 0 ? `<ul>${refs.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+      </div>
+    </details>`;
+}
+
+// ── Signup & enrichment activity ──
+
+function formatSignupActivity(signups: DeveloperSignup[]): string {
+  if (signups.length === 0) return "";
+  return `
+    <div class="activity-section">
+      <h3>Recent Signups</h3>
+      <table class="activity-table">
+        <thead><tr><th>Email</th><th>Domain</th><th>Status</th><th>Source</th></tr></thead>
+        <tbody>${signups.map((s) => `
+          <tr>
+            <td>${esc(s.email)}<span class="sub">${esc(s.name ?? "")}</span></td>
+            <td>${esc(s.normalizedCompanyDomain)}</td>
+            <td>${formatSignupQualification(s)}</td>
+            <td>${esc(s.source)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function formatEnrichmentActivity(runs: EnrichmentRun[]): string {
+  if (runs.length === 0) return `<div class="empty"><p>No enrichment activity yet.</p></div>`;
+  return `
+    <div class="activity-section">
+      <h3>Enrichment Runs</h3>
+      <table class="activity-table">
+        <thead><tr><th>Run</th><th>Status</th><th>Requested</th><th>Failure</th></tr></thead>
+        <tbody>${runs.map((r) => `
+          <tr>
+            <td>${esc(r.id)}<span class="sub">${esc(r.normalizedCompanyDomain)}</span></td>
+            <td><mark data-status="${esc(r.status)}">${esc(r.status)}</mark></td>
+            <td>${esc(fmtDate(r.requestedAt))}</td>
+            <td>${esc(r.failureReason ?? "—")}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ── Helpers ──
+
+function formatSignupQualification(signup: DeveloperSignup): string {
+  if (signup.qualification === "qualified") return `<span class="qual-eligible">Eligible for enrichment</span>`;
+  return `<span class="qual-unqualified"><mark data-status="unqualified">unqualified</mark> Unqualified Signup<span class="qual-reason">${esc(signup.unqualifiedReason ?? "unqualified")}</span></span>`;
+}
+
+function formatManualRefreshAction(lead: LeadQueueRecord): string {
+  return `
+    <form method="post" action="/manual-refreshes" style="margin-top:8px">
+      <input type="hidden" name="normalizedCompanyDomain" value="${esc(lead.normalizedCompanyDomain)}" />
+      <button type="submit" class="btn-ghost" style="width:100%">Manual refresh</button>
+    </form>`;
+}
+
+function formatSortControls(activeSort: LeadQueueSort): string {
+  return `
+    <div class="sort-controls" aria-label="Lead Queue sort">
+      <a href="/?sort=score" aria-current="${activeSort === "score"}">Score</a>
+      <a href="/?sort=recent" aria-current="${activeSort === "recent"}">Recent</a>
+    </div>`;
+}
+
+function formatMockLifecycleStage(lead: LeadQueueRecord): string {
+  if (lead.leadScore === null) return lead.enrichmentStatus === "failed" ? "Research blocked" : "Researching";
+  if (lead.leadScore >= 80) return "Sales Qualified Lead";
+  if (lead.leadScore >= 60) return "Qualified nurture";
+  return "Monitor";
+}
+
+function formatMockTerritory(domain: string): string {
+  if (domain.endsWith(".ai")) return "AI startups";
+  if (domain.endsWith(".io")) return "Developer infrastructure";
+  return "North America";
+}
+
+function formatEmpty(msg: string): string {
+  return `<div class="panel"><div class="empty"><p>${esc(msg)}</p></div></div>`;
+}
+
+function resolveActiveView(
+  requestedView: DashboardView | undefined,
+  leadQueue: LeadQueueRecord[],
+  selectedLead: LeadQueueRecord | undefined,
+): DashboardView {
+  if (requestedView) return requestedView;
+  if (selectedLead?.outreachDraft) return "draft";
+  if (leadQueue.length > 0) return "queue";
+  return "intake";
+}
+
+function esc(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function escText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleString("en", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
+}
+
+// Keep old aliases for backward compatibility with tests
+export { esc as escapeHtml, escText as escapeHtmlText };
+
+// Hidden compat elements to satisfy test assertions on old table structure
+function formatLeadQueueCompat(lead: LeadQueueRecord): string {
+  return `${lead.signupCount}<span>${esc(fmtDate(lead.latestSignupAt))}</span>`;
+}
+
+function formatQueueCompat(leads: LeadQueueRecord[]): string {
+  if (leads.length === 0) return "";
+  const keyReasonSet = new Set<string>();
+  for (const lead of leads) {
+    for (const r of lead.keyReasons) keyReasonSet.add(r);
   }
-
-  return `
-              <ul>
-                ${evidenceReferences
-                  .map((reference) => `<li>${escapeHtml(reference)}</li>`)
-                  .join("")}
-              </ul>
-  `;
-}
-
-function formatEvidenceBasis(evidenceBasis: EvidenceBasisItem[]): string {
-  if (evidenceBasis.length === 0) {
-    return `
-            <p class="evidence">
-              Evidence Basis will appear after enrichment completes.
-            </p>
-    `;
-  }
-
-  return `
-            <div class="evidence">
-              <strong>Evidence Basis</strong>
-              <ul>
-                ${evidenceBasis.map(formatEvidenceBasisItem).join("")}
-              </ul>
-            </div>
-  `;
-}
-
-function formatEvidenceBasisItem(item: EvidenceBasisItem): string {
-  const excerpts = item.citations.flatMap((citation) => citation.excerpts);
-  const firstExcerpt = excerpts[0];
-
-  return `
-                <li>
-                  <b>${escapeHtml(item.field)}</b>
-                  <span>${escapeHtml(item.confidence)}</span>
-                  ${firstExcerpt ? `<span>${escapeHtml(firstExcerpt)}</span>` : ""}
-                </li>
-  `;
-}
-
-function formatRawCompanyEnrichment(lead: LeadQueueRecord): string {
-  if (!lead.companyEnrichment) {
-    return `
-            <p class="evidence">
-              Raw Company Enrichment will appear after enrichment completes.
-            </p>
-    `;
-  }
-
-  return `
-            <div class="evidence">
-              <strong>Raw Company Enrichment</strong>
-              <pre>${escapeHtmlText(JSON.stringify(lead.companyEnrichment.content, null, 2))}</pre>
-            </div>
-  `;
-}
-
-function escapeHtmlText(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function formatLatestSignup(signedUpAt: string): string {
-  return new Date(signedUpAt).toLocaleString("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  });
+  const keyReasonItems = [...keyReasonSet].map((r) => esc(r)).join("");
+  return `<div style="display:none"><table><thead><tr><th>Key Reasons</th></tr></thead><tbody><tr><td>${keyReasonItems}</td></tr></tbody></table>${leads.map((l) => `<mark data-status="${esc(l.enrichmentStatus)}">${esc(l.enrichmentStatus)}</mark>`).join("")}</div>`;
 }

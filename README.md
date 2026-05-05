@@ -175,14 +175,25 @@ APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
 
 ## Live Core2x Enrichment
 
-Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment:
+Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment or in `.env.local`.
+
+Create `.env.local` in the repo root:
 
 ```bash
-export PARALLEL_API_KEY=...
+PARALLEL_API_KEY=...
+# Optional:
+# PARALLEL_API_BASE_URL=https://api.parallel.ai
+```
+
+`.env.local` is ignored by git. Shell environment variables still win over values in `.env.local`, so you can temporarily override a local value without editing the file.
+
+Then start the app without fake mode:
+
+```bash
 bun run dev
 ```
 
-Without `PARALLEL_API_KEY` or `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
+Without `PARALLEL_API_KEY` in the shell or `.env.local`, and without `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
 
 Use `APEX_ENRICHMENT_MODE=fake` or `bun run demo:wsl` when you need deterministic WSL-local demos with no live API dependency. Use live Parallel credentials when you want to verify real **Core2x Enrichment** behavior against the Parallel Task API.
 
@@ -207,7 +218,7 @@ This repo currently has:
 - seven-day Freshness Window reuse for fresh Company Enrichments, with stale signups starting new Enrichment Runs
 - a dashboard Manual refresh action for selected Leads
 - asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
-- live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set
+- live Core2x Parallel Task API wiring when `PARALLEL_API_KEY` is set in the shell or `.env.local`
 - fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
 - persisted Company Enrichments and Evidence Basis for completed live or fake worker results
 - Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence

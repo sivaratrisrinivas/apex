@@ -23,6 +23,30 @@ async function postDemoSignup(app: ReturnType<typeof createApp>, payload: unknow
 }
 
 describe("Demo Signup Payload intake", () => {
+  test("accepts a dashboard form post and returns to the Lead Queue moment", async () => {
+    const app = createApp({
+      env: {
+        APEX_ENRICHMENT_MODE: "fake",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/demo-signups", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          email: "engineer@modal.com",
+          name: "Ada Lovelace",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/?view=queue");
+  });
+
   test("accepts a corporate-looking Developer Signup and shows it in the Apex Dashboard", async () => {
     const app = createApp();
 

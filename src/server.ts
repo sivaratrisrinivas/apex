@@ -5,6 +5,7 @@ import {
   createParallelTaskClientFromEnv,
   type ParallelTaskClient,
 } from "./enrichment";
+import { loadLocalEnvFile } from "./local-env";
 import {
   PrototypeStore,
   type EnrichmentRun,
@@ -50,6 +51,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
             leadQueue: store.listLeadQueue(leadQueueSort),
             selectedLeadDomain,
             leadQueueSort,
+            activeView: parseDashboardView(url.searchParams.get("view")),
           }),
           {
             headers: {
@@ -59,8 +61,39 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         );
       }
 
+      if (
+        url.pathname === "/assets/apex-focus-surface.png" &&
+        request.method === "GET"
+      ) {
+        return new Response(
+          Bun.file(new URL("../assets/apex-focus-surface.png", import.meta.url)),
+          {
+            headers: {
+              "content-type": "image/png",
+            },
+          },
+        );
+      }
+
+      if (
+        url.pathname === "/assets/dashboard.css" &&
+        request.method === "GET"
+      ) {
+        return new Response(
+          Bun.file(new URL("../assets/dashboard.css", import.meta.url)),
+          {
+            headers: {
+              "content-type": "text/css; charset=utf-8",
+            },
+          },
+        );
+      }
+
       if (url.pathname === "/demo-signups" && request.method === "POST") {
-        const result = store.createDeveloperSignup(await readJsonPayload(request));
+        const isFormPost = isUrlEncodedFormPost(request);
+        const result = store.createDeveloperSignup(
+          await readStructuredPayload(request),
+        );
 
         if (!result.ok) {
           return jsonResponse(result.body, result.status);
@@ -75,6 +108,17 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
               enrichmentRunId,
               configuredEnrichmentWorker,
             );
+          });
+        }
+
+        if (isFormPost) {
+          return new Response(null, {
+            status: 303,
+            headers: {
+              location: result.enrichmentRun
+                ? "/?view=queue"
+                : "/?view=activity",
+            },
           });
         }
 
@@ -158,6 +202,26 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
 
 function parseLeadQueueSort(value: string | null): LeadQueueSort {
   return value === "recent" ? "recent" : "score";
+}
+
+function parseDashboardView(value: string | null):
+  | "intake"
+  | "queue"
+  | "lead"
+  | "draft"
+  | "activity"
+  | undefined {
+  if (
+    value === "intake" ||
+    value === "queue" ||
+    value === "lead" ||
+    value === "draft" ||
+    value === "activity"
+  ) {
+    return value;
+  }
+
+  return undefined;
 }
 
 function resolveEnrichmentWorker(
@@ -261,9 +325,11 @@ function formatErrorMessage(error: unknown): string {
 }
 
 if (import.meta.main) {
-  const port = Number(process.env.PORT ?? 3000);
+  const env = loadLocalEnvFile();
+  const port = Number(env.PORT ?? 3000);
   const app = createApp({
-    prototypeStorePath: process.env.APEX_PROTOTYPE_STORE_PATH ?? ".apex/prototype.sqlite",
+    prototypeStorePath: env.APEX_PROTOTYPE_STORE_PATH ?? ".apex/prototype.sqlite",
+    env,
   });
 
   Bun.serve({
