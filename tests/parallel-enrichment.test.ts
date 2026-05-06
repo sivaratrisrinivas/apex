@@ -217,6 +217,78 @@ describe("Parallel Enrichment", () => {
     });
   });
 
+  test("keeps enrichment when Parallel citation metadata is incomplete", async () => {
+    const taskClient: ParallelTaskClient = {
+      createTaskRun: async () => ({
+        runId: "trun_stripe",
+      }),
+      retrieveTaskRunResult: async () => ({
+        output: {
+          type: "json",
+          content: {
+            company: {
+              name: "Stripe",
+              domain: "stripe.com",
+              headquarters: "San Francisco, CA",
+              employeeRange: "7000+ employees",
+            },
+            funding: {
+              stage: "Private",
+              totalRaised: "$2B+",
+              latestRound: "Unknown",
+              latestRoundDate: "Unknown",
+            },
+            technicalSignals: {
+              aiWorkloads: "Runs developer-facing financial infrastructure.",
+              computeIntensity: "high",
+              developerToolRelevance: "Strong developer platform signal.",
+            },
+            salesSignals: {
+              keyReasons: ["Developer platform", "Large infrastructure footprint"],
+              suggestedNextAction: "Review developer infrastructure workflows.",
+            },
+            confidence: {
+              evidenceConfidence: "High",
+              notes: "Technical signal is supported by citations.",
+            },
+            outreachSeed: {
+              personalizationAngles: ["developer infrastructure"],
+              warnings: [],
+            },
+          },
+          basis: [
+            {
+              field: "technicalSignals.developerToolRelevance",
+              confidence: "high",
+              reasoning: "Stripe has public developer documentation.",
+              citations: [
+                {
+                  url: "https://stripe.com/docs",
+                  excerpts: ["Stripe provides developer documentation."],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    };
+    const worker = createEnrichmentWorker({ taskClient });
+
+    const completion = await worker(enrichmentRunFor("stripe.com"));
+
+    expect(completion.status).toBe("completed");
+    if (completion.status === "failed" || !completion.companyEnrichment) {
+      throw new Error("Expected completed enrichment with company data.");
+    }
+
+    expect(completion.companyEnrichment.content.company.name).toBe("Stripe");
+    expect(completion.companyEnrichment.evidenceBasis[0].citations[0]).toEqual({
+      title: "stripe.com",
+      url: "https://stripe.com/docs",
+      excerpts: ["Stripe provides developer documentation."],
+    });
+  });
+
   test("keeps usable Company identity as Partial Enrichment when non-critical fields are missing", async () => {
     const taskClient: ParallelTaskClient = {
       createTaskRun: async () => ({

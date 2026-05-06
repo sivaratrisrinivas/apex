@@ -1013,7 +1013,7 @@ function parseEvidenceBasis(value: unknown): EvidenceBasisItem[] {
   }
 
   if (!Array.isArray(value)) {
-    throw new Error("Parallel result basis must be an array.");
+    return [];
   }
 
   return value.map((item, index) => parseEvidenceBasisItem(item, index));
@@ -1023,39 +1023,67 @@ function parseEvidenceBasisItem(value: unknown, index: number): EvidenceBasisIte
   const item = expectRecord(value, `basis[${index}]`);
 
   return {
-    field: expectString(item.field, `basis[${index}].field`),
+    field: parseOptionalNonEmptyString(item.field) ?? `basis[${index}]`,
     citations: parseCitations(item.citations, index),
-    reasoning: expectString(item.reasoning, `basis[${index}].reasoning`),
-    confidence: expectString(item.confidence, `basis[${index}].confidence`),
+    reasoning: parseOptionalNonEmptyString(item.reasoning) ?? "No reasoning returned.",
+    confidence: parseOptionalNonEmptyString(item.confidence) ?? "Unknown",
   };
 }
 
 function parseCitations(value: unknown, basisIndex: number): EvidenceBasisItem["citations"] {
   if (!Array.isArray(value)) {
-    throw new Error(`basis[${basisIndex}].citations must be an array.`);
+    return [];
   }
 
-  return value.map((citation, citationIndex) => {
-    const citationRecord = expectRecord(
-      citation,
-      `basis[${basisIndex}].citations[${citationIndex}]`,
-    );
+  return value.flatMap((citation, citationIndex) => {
+    if (typeof citation !== "object" || citation === null || Array.isArray(citation)) {
+      return [];
+    }
 
+    const citationRecord = citation as Record<string, unknown>;
+    const url = parseOptionalNonEmptyString(citationRecord.url) ?? "";
     return {
-      title: expectString(
-        citationRecord.title,
-        `basis[${basisIndex}].citations[${citationIndex}].title`,
-      ),
-      url: expectString(
-        citationRecord.url,
-        `basis[${basisIndex}].citations[${citationIndex}].url`,
-      ),
-      excerpts: expectStringArray(
-        citationRecord.excerpts,
-        `basis[${basisIndex}].citations[${citationIndex}].excerpts`,
-      ),
+      title:
+        parseOptionalNonEmptyString(citationRecord.title) ??
+        inferCitationTitle(url, basisIndex, citationIndex),
+      url,
+      excerpts: parseOptionalStringArray(citationRecord.excerpts),
     };
   });
+}
+
+function parseOptionalNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseOptionalStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function inferCitationTitle(
+  url: string,
+  basisIndex: number,
+  citationIndex: number,
+): string {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    if (hostname.length > 0) {
+      return hostname;
+    }
+  } catch {
+    // Fall through to a stable label for incomplete Parallel citation metadata.
+  }
+
+  return `Source ${basisIndex + 1}.${citationIndex + 1}`;
 }
 
 function expectRecord(value: unknown, field: string): Record<string, unknown> {
