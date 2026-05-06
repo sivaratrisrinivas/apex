@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import type { CompanyEnrichment, EvidenceBasisItem } from "./signups";
 
 /**
@@ -49,7 +49,7 @@ Style guidelines:
 
 const OUTREACH_USER_PROMPT_TEMPLATE = `Generate an outreach email for the following company. Return ONLY valid JSON with this exact shape:
 {
-  "subject": "short, specific subject line (no generic 'partnership' or 'intro' subjects)",
+  "subject": "short, specific subject line under 70 characters",
   "body": "the email body text, use \\n for newlines"
 }
 
@@ -64,6 +64,23 @@ Evidence Basis:
 \`\`\`
 
 Remember: Return ONLY the JSON object, no markdown fencing, no explanation.`;
+
+const OUTREACH_DRAFT_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    subject: {
+      type: Type.STRING,
+      description: "Short, specific subject line under 70 characters.",
+      maxLength: "70",
+    },
+    body: {
+      type: Type.STRING,
+      description: "Concise outreach email body with newline separators.",
+    },
+  },
+  required: ["subject", "body"],
+  propertyOrdering: ["subject", "body"],
+};
 
 /**
  * Creates a Gemini-powered outreach draft writer.
@@ -115,9 +132,10 @@ export function createGeminiDraftWriter(options: {
         contents: userPrompt,
         config: {
           systemInstruction: OUTREACH_SYSTEM_PROMPT,
-          temperature: 0.55,
-          maxOutputTokens: 1024,
+          temperature: 0.35,
+          maxOutputTokens: 2048,
           responseMimeType: "application/json",
+          responseSchema: OUTREACH_DRAFT_RESPONSE_SCHEMA,
         },
       });
 
@@ -132,18 +150,14 @@ export function createGeminiDraftWriter(options: {
         .replace(/\s*```$/i, "")
         .trim();
 
-      const parsed = JSON.parse(jsonText) as { subject: string; body: string };
+      const draft = normalizeDraftContent(parseDraftJson(jsonText), content);
 
-      if (!parsed.subject || !parsed.body) {
-        throw new Error("Gemini response missing subject or body fields");
-      }
-
-      console.log(`[apex]   ✓ [Gemini] Draft generated: "${parsed.subject}"`);
+      console.log(`[apex]   ✓ [Gemini] Draft generated: "${draft.subject}"`);
 
       return {
         status: "ready",
-        subject: parsed.subject,
-        body: parsed.body,
+        subject: draft.subject,
+        body: draft.body,
         evidenceReferences,
       };
     } catch (error) {
@@ -158,6 +172,43 @@ export function createGeminiDraftWriter(options: {
   };
 }
 
+function parseDraftJson(jsonText: string): { subject: string; body: string } {
+  const parsed = JSON.parse(jsonText) as unknown;
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Gemini response must be a JSON object");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.subject !== "string" || typeof record.body !== "string") {
+    throw new Error("Gemini response missing subject or body fields");
+  }
+
+  return {
+    subject: record.subject,
+    body: record.body,
+  };
+}
+
+function normalizeDraftContent(
+  draft: { subject: string; body: string },
+  content: CompanyEnrichment["content"],
+): { subject: string; body: string } {
+  const subject = draft.subject.trim().replace(/\s+/g, " ");
+  const body = draft.body.trim();
+
+  if (!subject || !body) {
+    throw new Error("Gemini response returned an empty subject or body");
+  }
+
+  return {
+    subject: subject.length <= 80
+      ? subject
+      : `${formatPossessive(content.company.name)} ${selectConciseOutreachAngle(content)} story`,
+    body,
+  };
+}
+
 /**
  * Template-based fallback (the original logic, extracted for reuse).
  */
@@ -165,21 +216,19 @@ function buildTemplateDraft(
   content: CompanyEnrichment["content"],
   evidenceReferences: string[],
 ): OutreachDraftContent {
-  const primaryAngle =
-    content.outreachSeed.personalizationAngles[0] ??
-    content.salesSignals.keyReasons[0] ??
-    "developer infrastructure";
+  const subjectAngle = selectConciseOutreachAngle(content);
+  const narrativeAngle = selectNarrativeOutreachAngle(content);
   const reasons = formatInlineList(content.salesSignals.keyReasons);
   const evidenceSignal =
     evidenceReferences[0] ?? content.technicalSignals.computeIntensity;
 
   return {
     status: "ready",
-    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(primaryAngle)} story`,
+    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(subjectAngle)} story`,
     body: [
       `Hi ${content.company.name} team,`,
       "",
-      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${primaryAngle}.`,
+      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${narrativeAngle}.`,
       "That usually creates a second problem behind the product story: the GTM team needs to spot the right accounts, understand why the signal matters, and move fast without hand-building every brief.",
       "Parallel helps teams turn account research into API-backed workflows, so a signup like this can become a grounded account narrative instead of another row in a CRM.",
       `The strongest signal I found is ${evidenceSignal}, alongside ${reasons}.`,
@@ -197,6 +246,59 @@ function formatSubjectAngle(value: string): string {
   const trimmed = value.trim().replace(/\s+scaling$/i, "");
 
   return trimmed.length > 0 ? trimmed : "developer infrastructure";
+}
+
+function selectConciseOutreachAngle(content: CompanyEnrichment["content"]): string {
+  const conciseSeedAngle = content.outreachSeed.personalizationAngles
+    .map(formatSubjectAngle)
+    .find(isConciseAngle);
+
+  if (conciseSeedAngle) {
+    return conciseSeedAngle;
+  }
+
+  const signalText = [
+    content.technicalSignals.aiWorkloads,
+    content.technicalSignals.developerToolRelevance,
+    content.salesSignals.keyReasons.join(" "),
+  ].join(" ").toLowerCase();
+
+  if (signalText.includes("meeting") || signalText.includes("note")) {
+    return "AI workflow";
+  }
+
+  if (signalText.includes("api") || signalText.includes("developer")) {
+    return "developer platform";
+  }
+
+  if (
+    signalText.includes("compute") ||
+    signalText.includes("infrastructure") ||
+    signalText.includes("gpu")
+  ) {
+    return "AI infrastructure";
+  }
+
+  return content.salesSignals.keyReasons
+    .map(formatSubjectAngle)
+    .find(isConciseAngle) ?? "growth";
+}
+
+function selectNarrativeOutreachAngle(content: CompanyEnrichment["content"]): string {
+  const angle =
+    content.outreachSeed.personalizationAngles[0] ??
+    content.salesSignals.keyReasons[0];
+
+  return angle?.trim() || selectConciseOutreachAngle(content);
+}
+
+function isConciseAngle(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 42 &&
+    !/[.!?]/.test(value) &&
+    value.split(/\s+/).length <= 6
+  );
 }
 
 function formatInlineList(values: string[]): string {

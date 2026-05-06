@@ -102,6 +102,90 @@ describe("Outreach Drafts", () => {
     );
   });
 
+  test("keeps fallback Outreach Draft subjects short when Parallel returns sentence-length angles", async () => {
+    const app = createApp({
+      enrichmentWorker: async () =>
+        ({
+          status: "completed",
+          companyEnrichment: {
+            content: {
+              company: {
+                name: "Granola.ai",
+                domain: "granola.ai",
+                headquarters: "London, United Kingdom",
+                employeeRange: "104",
+              },
+              funding: {
+                stage: "Series C",
+                totalRaised: "$192 million",
+                latestRound: "Series C",
+                latestRoundDate: "2026-05-01",
+              },
+              technicalSignals: {
+                aiWorkloads: "AI meeting notes and conversational context workflows.",
+                computeIntensity: "High",
+                developerToolRelevance: "Personal and Enterprise APIs plus integrations with developer tools.",
+              },
+              salesSignals: {
+                keyReasons: [
+                  "Recent Series C funding",
+                  "AI-centric meeting-note platform",
+                  "Personal and Enterprise APIs",
+                ],
+                suggestedNextAction: "Explore workflow automation opportunities.",
+              },
+              confidence: {
+                evidenceConfidence: "High",
+                notes: "Evidence-backed enrichment.",
+              },
+              outreachSeed: {
+                personalizationAngles: [
+                  "Granola.ai helps teams organize conversational context, generate insights, and automate post-meeting workflows.",
+                ],
+                warnings: [],
+              },
+            },
+            evidenceBasis: [
+              {
+                field: "technicalSignals.aiWorkloads",
+                confidence: "high",
+                reasoning: "Granola.ai describes AI meeting note workflows.",
+                citations: [
+                  {
+                    title: "Granola product",
+                    url: "https://granola.ai",
+                    excerpts: ["AI meeting notes"],
+                  },
+                ],
+              },
+            ],
+          },
+        }) as EnrichmentRunCompletion,
+    });
+
+    await postDemoSignup(app, {
+      email: "srinivas@granola.ai",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+    await waitForBackgroundWork();
+
+    const response = await postOutreachDraft(app, {
+      normalizedCompanyDomain: "granola.ai",
+    });
+    const body = (await response.json()) as {
+      outreachDraft: {
+        subject: string;
+        body: string;
+      };
+    };
+
+    expect(response.status).toBe(201);
+    expect(body.outreachDraft.subject).toBe("Granola.ai's AI workflow story");
+    expect(body.outreachDraft.subject.length).toBeLessThanOrEqual(80);
+    expect(body.outreachDraft.subject).not.toContain("organize conversational context");
+    expect(body.outreachDraft.body).toContain("A developer from granola.ai signed up for Parallel");
+  });
+
   test("keeps the Lead Score independent from Outreach Draft generation", async () => {
     const app = createApp({
       env: {

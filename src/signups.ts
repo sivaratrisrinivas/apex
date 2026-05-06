@@ -1705,21 +1705,19 @@ function buildTemplateDraftContent(
     };
   }
 
-  const primaryAngle =
-    content.outreachSeed.personalizationAngles[0] ??
-    content.salesSignals.keyReasons[0] ??
-    "developer infrastructure";
+  const subjectAngle = selectConciseOutreachAngle(content);
+  const narrativeAngle = selectNarrativeOutreachAngle(content);
   const reasons = formatInlineList(content.salesSignals.keyReasons);
   const evidenceSignal =
     evidenceReferences[0] ?? content.technicalSignals.computeIntensity;
 
   return {
     status: "ready",
-    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(primaryAngle)} story`,
+    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(subjectAngle)} story`,
     body: [
       `Hi ${content.company.name} team,`,
       "",
-      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${primaryAngle}.`,
+      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${narrativeAngle}.`,
       "That usually creates a second problem behind the product story: the GTM team needs to spot the right accounts, understand why the signal matters, and move fast without hand-building every brief.",
       "Parallel helps teams turn account research into API-backed workflows, so a signup like this can become a grounded account narrative instead of another row in a CRM.",
       `The strongest signal I found is ${evidenceSignal}, alongside ${reasons}.`,
@@ -1737,6 +1735,59 @@ function formatSubjectAngle(value: string): string {
   const trimmed = value.trim().replace(/\s+scaling$/i, "");
 
   return trimmed.length > 0 ? trimmed : "developer infrastructure";
+}
+
+function selectConciseOutreachAngle(content: CompanyEnrichmentContent): string {
+  const conciseSeedAngle = content.outreachSeed.personalizationAngles
+    .map(formatSubjectAngle)
+    .find(isConciseAngle);
+
+  if (conciseSeedAngle) {
+    return conciseSeedAngle;
+  }
+
+  const signalText = [
+    content.technicalSignals.aiWorkloads,
+    content.technicalSignals.developerToolRelevance,
+    content.salesSignals.keyReasons.join(" "),
+  ].join(" ").toLowerCase();
+
+  if (signalText.includes("meeting") || signalText.includes("note")) {
+    return "AI workflow";
+  }
+
+  if (signalText.includes("api") || signalText.includes("developer")) {
+    return "developer platform";
+  }
+
+  if (
+    signalText.includes("compute") ||
+    signalText.includes("infrastructure") ||
+    signalText.includes("gpu")
+  ) {
+    return "AI infrastructure";
+  }
+
+  return content.salesSignals.keyReasons
+    .map(formatSubjectAngle)
+    .find(isConciseAngle) ?? "growth";
+}
+
+function selectNarrativeOutreachAngle(content: CompanyEnrichmentContent): string {
+  const angle =
+    content.outreachSeed.personalizationAngles[0] ??
+    content.salesSignals.keyReasons[0];
+
+  return angle?.trim() || selectConciseOutreachAngle(content);
+}
+
+function isConciseAngle(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 42 &&
+    !/[.!?]/.test(value) &&
+    value.split(/\s+/).length <= 6
+  );
 }
 
 function formatInlineList(values: string[]): string {
