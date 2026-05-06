@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import type { CompanyEnrichment, EvidenceBasisItem } from "./signups";
 
 /**
@@ -49,11 +49,15 @@ Style guidelines:
 - Do not use internal labels like "Evidence used", "Suggested next action", or "Apex flagged"
 - Do not invent names, customers, metrics, or technical claims not present in the enrichment data`;
 
-const OUTREACH_USER_PROMPT_TEMPLATE = `Generate an outreach email for the following company. Return ONLY valid JSON with this exact shape:
-{
-  "subject": "short, specific subject line under 70 characters",
-  "body": "the email body text, use \\n for newlines"
-}
+const OUTREACH_BODY_PROMPT_TEMPLATE = `Write only the outreach email body for the following company.
+
+Rules:
+- Return plain text only
+- Do not return JSON
+- Do not include a subject line
+- Do not use markdown
+- Use normal paragraph breaks
+- Keep it to 5 sentences max
 
 Company Enrichment Data:
 \`\`\`json
@@ -65,24 +69,7 @@ Evidence Basis:
 {evidence_json}
 \`\`\`
 
-Remember: Return ONLY the JSON object, no markdown fencing, no explanation.`;
-
-const OUTREACH_DRAFT_RESPONSE_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    subject: {
-      type: Type.STRING,
-      description: "Short, specific subject line under 70 characters.",
-      maxLength: "70",
-    },
-    body: {
-      type: Type.STRING,
-      description: "Concise outreach email body with newline separators.",
-    },
-  },
-  required: ["subject", "body"],
-  propertyOrdering: ["subject", "body"],
-};
+Remember: Return only the email body text.`;
 
 /**
  * Creates a Gemini-powered outreach draft writer.
@@ -132,19 +119,20 @@ export function createGeminiDraftWriter(options: {
     const startTime = Date.now();
 
     try {
-      const draft = await generateDraftWithRetry({
+      const body = await generateBodyWithRetry({
         generateContent,
         model,
         content,
         evidenceBasis,
       });
+      const subject = buildSubject(content);
 
-      console.log(`[apex]   ✓ [Gemini] Draft generated: "${draft.subject}"`);
+      console.log(`[apex]   ✓ [Gemini] Draft generated: "${subject}"`);
 
       return {
         status: "ready",
-        subject: draft.subject,
-        body: draft.body,
+        subject,
+        body,
         evidenceReferences,
       };
     } catch (error) {
@@ -159,21 +147,21 @@ export function createGeminiDraftWriter(options: {
   };
 }
 
-async function generateDraftWithRetry(options: {
+async function generateBodyWithRetry(options: {
   generateContent: GeminiGenerateContent;
   model: string;
   content: CompanyEnrichment["content"];
   evidenceBasis: EvidenceBasisItem[];
-}): Promise<{ subject: string; body: string }> {
+}): Promise<string> {
   const attempts = [
     {
       label: "primary",
-      contents: buildFullOutreachPrompt(options.content, options.evidenceBasis),
+      contents: buildFullBodyPrompt(options.content, options.evidenceBasis),
       maxOutputTokens: 2048,
     },
     {
       label: "compact retry",
-      contents: buildCompactOutreachPrompt(options.content, options.evidenceBasis),
+      contents: buildCompactBodyPrompt(options.content, options.evidenceBasis),
       maxOutputTokens: 1024,
     },
   ];
@@ -188,42 +176,38 @@ async function generateDraftWithRetry(options: {
         systemInstruction: OUTREACH_SYSTEM_PROMPT,
         temperature: 0.25,
         maxOutputTokens: attempt.maxOutputTokens,
-        responseMimeType: "application/json",
-        responseSchema: OUTREACH_DRAFT_RESPONSE_SCHEMA,
+        responseMimeType: "text/plain",
       },
     });
     const rawText = response.text?.trim() ?? "";
     console.log(`[apex]   → [Gemini] ${attempt.label} response received (${rawText.length} chars)`);
 
     try {
-      return normalizeDraftContent(
-        parseDraftJson(stripJsonFencing(rawText)),
-        options.content,
-      );
+      return normalizeGeneratedBody(rawText);
     } catch (error) {
       lastError = error;
       const reason = error instanceof Error ? error.message : String(error);
       if (index < attempts.length - 1) {
-        console.log(`[apex]   → [Gemini] ${attempt.label} returned invalid JSON: ${reason}; retrying with compact prompt`);
+        console.log(`[apex]   → [Gemini] ${attempt.label} returned unusable body: ${reason}; retrying with compact prompt`);
       }
     }
   }
 
   throw lastError instanceof Error
     ? lastError
-    : new Error("Gemini failed to return a valid outreach draft.");
+    : new Error("Gemini failed to return a usable outreach body.");
 }
 
-function buildFullOutreachPrompt(
+function buildFullBodyPrompt(
   content: CompanyEnrichment["content"],
   evidenceBasis: EvidenceBasisItem[],
 ): string {
-  return OUTREACH_USER_PROMPT_TEMPLATE
+  return OUTREACH_BODY_PROMPT_TEMPLATE
     .replace("{enrichment_json}", JSON.stringify(content, null, 2))
     .replace("{evidence_json}", JSON.stringify(evidenceBasis, null, 2));
 }
 
-function buildCompactOutreachPrompt(
+function buildCompactBodyPrompt(
   content: CompanyEnrichment["content"],
   evidenceBasis: EvidenceBasisItem[],
 ): string {
@@ -233,9 +217,11 @@ function buildCompactOutreachPrompt(
     .join("; ");
   const narrativeAngle = selectNarrativeOutreachAngle(content);
 
-  return `Return ONLY valid JSON with keys "subject" and "body".
-Subject must be under 70 characters.
-Body must be 5 sentences max and use \\n for paragraph breaks.
+  return `Write only the outreach email body.
+Return plain text only.
+Do not return JSON.
+Do not include a subject line.
+Keep it to 5 sentences max.
 
 Company: ${content.company.name}
 Domain: ${content.company.domain}
@@ -248,48 +234,42 @@ Evidence: ${evidenceSummary}
 Write the email on behalf of Parallel.`;
 }
 
-function stripJsonFencing(rawText: string): string {
+function normalizeGeneratedBody(rawText: string): string {
+  const body = stripTextFencing(rawText)
+    .replace(/^body:\s*/i, "")
+    .trim();
+
+  if (!body) {
+    throw new Error("Gemini response returned an empty body");
+  }
+
+  if (looksLikeJson(body)) {
+    throw new Error("Gemini returned JSON despite plain-text instructions");
+  }
+
+  return body;
+}
+
+function stripTextFencing(rawText: string): string {
   return rawText
-    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/^```(?:text|markdown|md)?\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
 }
 
-function parseDraftJson(jsonText: string): { subject: string; body: string } {
-  const parsed = JSON.parse(jsonText) as unknown;
+function looksLikeJson(value: string): boolean {
+  const trimmed = value.trim();
 
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Gemini response must be a JSON object");
-  }
-
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.subject !== "string" || typeof record.body !== "string") {
-    throw new Error("Gemini response missing subject or body fields");
-  }
-
-  return {
-    subject: record.subject,
-    body: record.body,
-  };
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    /"body"\s*:/.test(trimmed) ||
+    /"subject"\s*:/.test(trimmed)
+  );
 }
 
-function normalizeDraftContent(
-  draft: { subject: string; body: string },
-  content: CompanyEnrichment["content"],
-): { subject: string; body: string } {
-  const subject = draft.subject.trim().replace(/\s+/g, " ");
-  const body = draft.body.trim();
-
-  if (!subject || !body) {
-    throw new Error("Gemini response returned an empty subject or body");
-  }
-
-  return {
-    subject: subject.length <= 80
-      ? subject
-      : `${formatPossessive(content.company.name)} ${selectConciseOutreachAngle(content)} story`,
-    body,
-  };
+function buildSubject(content: CompanyEnrichment["content"]): string {
+  return `${formatPossessive(content.company.name)} ${formatSubjectAngle(selectConciseOutreachAngle(content))} story`;
 }
 
 /**

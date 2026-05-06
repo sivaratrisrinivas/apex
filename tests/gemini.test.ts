@@ -4,25 +4,27 @@ import { createGeminiDraftWriter } from "../src/gemini";
 import type { CompanyEnrichment } from "../src/signups";
 
 describe("Gemini outreach drafts", () => {
-  test("retries with a compact prompt when Gemini returns malformed JSON", async () => {
+  test("uses plain text body generation instead of parsing Gemini JSON", async () => {
     const responses = [
       '{"subject":"Granola follow up","body":"Hi Granola.ai team,',
-      JSON.stringify({
-        subject: "Granola.ai's AI workflow story",
-        body: [
-          "Hi Granola.ai team,",
-          "",
-          "A developer from granola.ai signed up for Parallel, and the timing looks interesting.",
-          "Parallel can help turn that signal into a grounded account narrative.",
-        ].join("\n"),
-      }),
+      [
+        "Hi Granola.ai team,",
+        "",
+        "A developer from granola.ai signed up for Parallel, and the timing looks interesting.",
+        "Parallel can help turn that signal into a grounded account narrative.",
+      ].join("\n"),
     ];
     const prompts: string[] = [];
+    const responseMimeTypes: Array<string | undefined> = [];
     const writer = createGeminiDraftWriter({
       apiKey: "gemini_test_key",
       generateContent: async (request) => {
-        const typedRequest = request as { contents: string };
+        const typedRequest = request as {
+          contents: string;
+          config?: { responseMimeType?: string };
+        };
         prompts.push(typedRequest.contents);
+        responseMimeTypes.push(typedRequest.config?.responseMimeType);
 
         return {
           text: responses.shift(),
@@ -33,8 +35,11 @@ describe("Gemini outreach drafts", () => {
     const draft = await writer(granolaEnrichment());
 
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("Return ONLY valid JSON");
-    expect(prompts[1]).toContain("Body must be 5 sentences max");
+    expect(prompts[0]).toContain("Return plain text only");
+    expect(prompts[0]).toContain("Do not return JSON");
+    expect(prompts[1]).toContain("Do not return JSON");
+    expect(prompts[1]).toContain("Keep it to 5 sentences max");
+    expect(responseMimeTypes).toEqual(["text/plain", "text/plain"]);
     expect(draft).toMatchObject({
       status: "ready",
       subject: "Granola.ai's AI workflow story",
