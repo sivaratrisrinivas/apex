@@ -84,10 +84,19 @@ describe("Outreach Drafts", () => {
     expect(body.outreachDraft).toMatchObject({
       companyName: "Modal Labs",
       status: "ready",
-      subject: "Modal Labs and Parallel",
+      subject: "Modal Labs' AI infrastructure story",
     });
     expect(body.outreachDraft.body).toContain("AI infrastructure scaling");
+    expect(body.outreachDraft.body).toContain(
+      "A developer from modal.com signed up for Parallel",
+    );
+    expect(body.outreachDraft.body).toContain(
+      "turn account research into API-backed workflows",
+    );
     expect(body.outreachDraft.body).toContain("technicalSignals.computeIntensity");
+    expect(body.outreachDraft.body).not.toContain("Apex flagged this Lead");
+    expect(body.outreachDraft.body).not.toContain("Evidence used:");
+    expect(body.outreachDraft.body).not.toContain("Suggested next action:");
     expect(body.outreachDraft.evidenceReferences).toContain(
       "technicalSignals.computeIntensity: Modal infrastructure overview",
     );
@@ -119,6 +128,66 @@ describe("Outreach Drafts", () => {
     expect(beforeHtml).toContain("<b>93</b>");
     expect(afterHtml).toContain("<b>93</b>");
     expect(afterHtml).toContain("Outreach Draft");
+  });
+
+  test("reuses an existing Outreach Draft instead of generating it twice", async () => {
+    let draftWriterCalls = 0;
+    const app = createApp({
+      env: {
+        APEX_ENRICHMENT_MODE: "fake",
+      },
+      outreachDraftWriter: async () => {
+        draftWriterCalls += 1;
+
+        return {
+          status: "ready" as const,
+          subject: `custom Modal follow up ${draftWriterCalls}`,
+          body: "Custom body",
+          evidenceReferences: ["technicalSignals.computeIntensity: Modal infrastructure overview"],
+        };
+      },
+    });
+
+    await postDemoSignup(app, {
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+    await waitForBackgroundWork();
+
+    const firstResponse = await postOutreachDraft(app, {
+      normalizedCompanyDomain: "modal.com",
+    });
+    const firstBody = (await firstResponse.json()) as {
+      outreachDraft: { id: string; subject: string };
+      reusedExisting?: boolean;
+    };
+    const secondResponse = await postOutreachDraft(app, {
+      normalizedCompanyDomain: "modal.com",
+    });
+    const secondBody = (await secondResponse.json()) as {
+      outreachDraft: { id: string; subject: string };
+      reusedExisting?: boolean;
+    };
+    const rewriteResponse = await postOutreachDraft(app, {
+      normalizedCompanyDomain: "modal.com",
+      regenerate: true,
+    });
+    const rewriteBody = (await rewriteResponse.json()) as {
+      outreachDraft: { id: string; subject: string };
+      reusedExisting?: boolean;
+    };
+
+    expect(firstResponse.status).toBe(201);
+    expect(firstBody.reusedExisting).toBe(false);
+    expect(secondResponse.status).toBe(200);
+    expect(secondBody.reusedExisting).toBe(true);
+    expect(secondBody.outreachDraft.id).toBe(firstBody.outreachDraft.id);
+    expect(secondBody.outreachDraft.subject).toBe("custom Modal follow up 1");
+    expect(rewriteResponse.status).toBe(201);
+    expect(rewriteBody.reusedExisting).toBe(false);
+    expect(rewriteBody.outreachDraft.id).not.toBe(firstBody.outreachDraft.id);
+    expect(rewriteBody.outreachDraft.subject).toBe("custom Modal follow up 2");
+    expect(draftWriterCalls).toBe(2);
   });
 
   test("avoids fake-personalized Outreach Drafts when evidence is weak", async () => {
@@ -183,11 +252,12 @@ describe("Outreach Drafts", () => {
     expect(response.status).toBe(201);
     expect(body.outreachDraft.status).toBe("needs-evidence");
     expect(body.outreachDraft.body).toContain(
-      "A developer from stealth-ai.dev signed up for Parallel.",
+      "A developer from stealth-ai.dev signed up for Parallel",
     );
     expect(body.outreachDraft.body).toContain(
       "Ask a discovery question before personalizing.",
     );
+    expect(body.outreachDraft.body).toContain("opening chapter");
     expect(body.outreachDraft.body).not.toContain("stealth agent workloads");
     expect(body.outreachDraft.evidenceReferences).toEqual([]);
   });
@@ -217,7 +287,10 @@ describe("Outreach Drafts", () => {
     expect(detail).toContain("Outreach Draft");
     expect(detail).toContain("<textarea");
     expect(detail).toContain("AI infrastructure scaling");
+    expect(detail).toContain("turn account research into API-backed workflows");
     expect(detail).toContain("data-copy-outreach");
+    expect(detail).toContain("Rewrite draft");
+    expect(detail).toContain('name="regenerate" value="true"');
     expect(detail).toContain(
       "technicalSignals.computeIntensity: Modal infrastructure overview",
     );

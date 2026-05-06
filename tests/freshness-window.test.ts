@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createApp } from "../src/server";
+import { createApp, type EnrichmentRunCompletion } from "../src/server";
 import {
   PrototypeStore,
   type CompanyEnrichmentResult,
@@ -96,6 +96,15 @@ async function waitForBackgroundWork() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return { promise, resolve };
+}
+
 describe("Freshness Window", () => {
   test("reuses a fresh Company Enrichment while updating signup urgency signals", () => {
     const store = new PrototypeStore();
@@ -187,6 +196,39 @@ describe("Freshness Window", () => {
     });
   });
 
+  test("reuses an active Enrichment Run for repeated signups from the same Company", () => {
+    const store = new PrototypeStore();
+    const firstSignup = expectSuccessfulSignup(
+      store.createDeveloperSignup({
+        email: "first@modal.com",
+        signedUpAt: "2026-05-01T10:00:00.000Z",
+      }),
+    );
+    const secondSignup = expectSuccessfulSignup(
+      store.createDeveloperSignup({
+        email: "second@modal.com",
+        signedUpAt: "2026-05-01T10:02:00.000Z",
+      }),
+    );
+
+    expect(firstSignup.enrichmentRun).toMatchObject({
+      id: "enrichment_run_1",
+      normalizedCompanyDomain: "modal.com",
+      status: "pending",
+    });
+    expect(secondSignup.enrichmentRun).toBeUndefined();
+    expect(store.listEnrichmentRuns()).toHaveLength(1);
+
+    const modalLead = store.listLeadQueue()[0];
+
+    expect(modalLead).toMatchObject({
+      normalizedCompanyDomain: "modal.com",
+      enrichmentStatus: "pending",
+      signupCount: 2,
+      latestSignupAt: "2026-05-01T10:02:00.000Z",
+    });
+  });
+
   test("offers a manual refresh action that forces a new Enrichment Run for the selected Lead", async () => {
     const startedRuns: string[] = [];
     const app = createApp({
@@ -211,7 +253,7 @@ describe("Freshness Window", () => {
     const dashboard = await app.fetch(new Request("http://localhost/"));
     const html = await dashboard.text();
 
-    expect(html).toContain("Manual refresh");
+    expect(html).toContain("Re-run enrichment");
     expect(html).toContain('action="/manual-refreshes"');
     expect(html).toContain('name="normalizedCompanyDomain" value="modal.com"');
 
@@ -226,5 +268,48 @@ describe("Freshness Window", () => {
       "enrichment_run_1:modal.com",
       "enrichment_run_2:modal.com",
     ]);
+  });
+
+  test("rejects a manual refresh while the latest Enrichment Run is still active", async () => {
+    const completion = deferred<EnrichmentRunCompletion>();
+    const startedRuns: string[] = [];
+    const app = createApp({
+      enrichmentWorker: async (enrichmentRun) => {
+        startedRuns.push(`${enrichmentRun.id}:${enrichmentRun.normalizedCompanyDomain}`);
+
+        return completion.promise;
+      },
+    });
+
+    const signupResponse = await postDemoSignup(app, {
+      email: "first@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+
+    expect(signupResponse.status).toBe(201);
+    await waitForBackgroundWork();
+
+    const dashboard = await app.fetch(
+      new Request("http://localhost/?view=lead&lead=modal.com"),
+    );
+    const html = await dashboard.text();
+
+    expect(html).toContain("Research in progress");
+    expect(html).not.toContain("Re-run enrichment");
+
+    const refreshResponse = await postManualRefresh(app, "modal.com");
+    const body = (await refreshResponse.json()) as { error: string };
+
+    expect(refreshResponse.status).toBe(409);
+    expect(body.error).toBe(
+      "Manual refresh is already running for this Company.",
+    );
+    expect(startedRuns).toEqual(["enrichment_run_1:modal.com"]);
+
+    completion.resolve({
+      status: "completed",
+      companyEnrichment: modalEnrichment,
+    });
+    await waitForBackgroundWork();
   });
 });

@@ -29,19 +29,23 @@ You will receive structured company enrichment data including:
 - Evidence basis with citations
 - Outreach seed with personalization angles
 
-Your task is to write a concise, compelling outreach email that:
-1. Opens with a specific, researched observation about the company (NOT generic flattery)
-2. Connects their technical signals to Parallel's value proposition naturally
-3. References specific evidence from the enrichment data to show genuine research
-4. Ends with a low-friction call to action (not a hard sell)
-5. Is 4-6 sentences max in the body — brevity is a feature
+Your task is to write a concise, compelling outreach email that reads like a small sales story:
+1. Start with the trigger: a developer from the company signed up for Parallel
+2. Turn the trigger into a researched observation about the company's current technical story
+3. Explain the business tension behind that story: research, account prioritization, and timing become hard to do manually
+4. Make Parallel the natural next chapter: API-backed research and enrichment workflows that turn raw signals into grounded account narratives
+5. End with a low-friction call to action (not a hard sell)
+6. Is 5-7 sentences max in the body — concise, but with a clear narrative arc
 
 Style guidelines:
 - Write like a thoughtful human, not a sales bot
 - No buzzwords like "synergy", "leverage", "game-changer"
 - No exclamation marks
 - Be specific: cite real data from the enrichment (funding, compute signals, etc.)
-- Sound curious and helpful, not pushy`;
+- Sound curious and helpful, not pushy
+- Do not mention Apex
+- Do not use internal labels like "Evidence used", "Suggested next action", or "Apex flagged"
+- Do not invent names, customers, metrics, or technical claims not present in the enrichment data`;
 
 const OUTREACH_USER_PROMPT_TEMPLATE = `Generate an outreach email for the following company. Return ONLY valid JSON with this exact shape:
 {
@@ -89,10 +93,10 @@ export function createGeminiDraftWriter(options: {
         body: [
           `Hi ${content.company.name} team,`,
           "",
-          `A developer from ${content.company.domain} signed up for Parallel.`,
-          "I do not yet have enough Evidence Basis to personalize this confidently, so I would keep the first touch exploratory.",
-          "",
-          `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+          `A developer from ${content.company.domain} signed up for Parallel, which is a signal worth noticing but not enough evidence to personalize confidently.`,
+          "I would treat this as the opening chapter: someone may be exploring how to turn research and enrichment into API-backed automation, but the right first move is to learn what workflow they are trying to improve.",
+          content.salesSignals.suggestedNextAction,
+          "If useful, I can share a lightweight example of how Parallel turns a raw signup into a researched account narrative.",
         ].join("\n"),
         evidenceReferences,
       };
@@ -111,8 +115,9 @@ export function createGeminiDraftWriter(options: {
         contents: userPrompt,
         config: {
           systemInstruction: OUTREACH_SYSTEM_PROMPT,
-          temperature: 0.7,
+          temperature: 0.55,
           maxOutputTokens: 1024,
+          responseMimeType: "application/json",
         },
       });
 
@@ -164,25 +169,50 @@ function buildTemplateDraft(
     content.outreachSeed.personalizationAngles[0] ??
     content.salesSignals.keyReasons[0] ??
     "developer infrastructure";
-  const evidenceLine =
-    evidenceReferences.length > 0
-      ? `Evidence used: ${evidenceReferences.join("; ")}.`
-      : "Evidence used: none returned yet.";
+  const reasons = formatInlineList(content.salesSignals.keyReasons);
+  const evidenceSignal =
+    evidenceReferences[0] ?? content.technicalSignals.computeIntensity;
 
   return {
     status: "ready",
-    subject: `${content.company.name} and Parallel`,
+    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(primaryAngle)} story`,
     body: [
       `Hi ${content.company.name} team,`,
       "",
-      `I noticed ${content.company.name}'s work around ${primaryAngle}. Parallel helps teams turn research and enrichment workflows into reliable API-backed automation.`,
-      "",
-      `Apex flagged this Lead because ${content.salesSignals.keyReasons.join(", ")}.`,
-      evidenceLine,
-      `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${primaryAngle}.`,
+      "That usually creates a second problem behind the product story: the GTM team needs to spot the right accounts, understand why the signal matters, and move fast without hand-building every brief.",
+      "Parallel helps teams turn account research into API-backed workflows, so a signup like this can become a grounded account narrative instead of another row in a CRM.",
+      `The strongest signal I found is ${evidenceSignal}, alongside ${reasons}.`,
+      "Would it be worth comparing notes on how Parallel could help your team turn these research signals into cleaner sales motion?",
     ].join("\n"),
     evidenceReferences,
   };
+}
+
+function formatPossessive(value: string): string {
+  return value.endsWith("s") ? `${value}'` : `${value}'s`;
+}
+
+function formatSubjectAngle(value: string): string {
+  const trimmed = value.trim().replace(/\s+scaling$/i, "");
+
+  return trimmed.length > 0 ? trimmed : "developer infrastructure";
+}
+
+function formatInlineList(values: string[]): string {
+  const cleaned = values
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+
+  if (cleaned.length === 0) {
+    return "the signup activity";
+  }
+
+  if (cleaned.length === 1) {
+    return cleaned[0];
+  }
+
+  return `${cleaned.slice(0, -1).join(", ")} and ${cleaned[cleaned.length - 1]}`;
 }
 
 function formatEvidenceReference(item: EvidenceBasisItem): string {

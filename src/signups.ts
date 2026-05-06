@@ -177,10 +177,11 @@ export interface ManualRefreshError {
 
 export type ManualRefreshResult =
   | { ok: true; enrichmentRun: EnrichmentRun }
-  | { ok: false; status: 400 | 404; body: ManualRefreshError };
+  | { ok: false; status: 400 | 404 | 409; body: ManualRefreshError };
 
 export interface OutreachDraftPayload {
   normalizedCompanyDomain: unknown;
+  regenerate?: unknown;
 }
 
 export interface OutreachDraftError {
@@ -188,7 +189,7 @@ export interface OutreachDraftError {
 }
 
 export type OutreachDraftGenerationResult =
-  | { ok: true; outreachDraft: OutreachDraft }
+  | { ok: true; outreachDraft: OutreachDraft; reusedExisting: boolean }
   | { ok: false; status: 400 | 404 | 409; body: OutreachDraftError };
 
 const FRESHNESS_WINDOW_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
@@ -342,12 +343,22 @@ export class PrototypeStore {
           evidenceBasis: freshCompanyEnrichment.evidenceBasis,
         });
       } else {
-        enrichmentRun = this.createEnrichmentRun(developerSignup, company);
-        this.ensureLeadQueueRecord(
-          company,
-          developerSignup.signedUpAt,
-          enrichmentRun.status,
-        );
+        const activeRun = this.findActiveEnrichmentRunForCompany(company.id);
+
+        if (activeRun) {
+          this.ensureLeadQueueRecord(
+            company,
+            developerSignup.signedUpAt,
+            activeRun.status,
+          );
+        } else {
+          enrichmentRun = this.createEnrichmentRun(developerSignup, company);
+          this.ensureLeadQueueRecord(
+            company,
+            developerSignup.signedUpAt,
+            enrichmentRun.status,
+          );
+        }
       }
     }
 
@@ -580,6 +591,18 @@ export class PrototypeStore {
       };
     }
 
+    const activeRun = this.findActiveEnrichmentRunForCompany(company.id);
+
+    if (activeRun) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: "Manual refresh is already running for this Company.",
+        },
+      };
+    }
+
     const enrichmentRun = this.createEnrichmentRun(
       {
         ...latestDeveloperSignup,
@@ -626,6 +649,14 @@ export class PrototypeStore {
       };
     }
 
+    if (lead.outreachDraft && !parsedPayload.regenerate) {
+      return {
+        ok: true,
+        outreachDraft: lead.outreachDraft,
+        reusedExisting: true,
+      };
+    }
+
     if (!lead.companyEnrichment) {
       return {
         ok: false,
@@ -647,6 +678,7 @@ export class PrototypeStore {
     return {
       ok: true,
       outreachDraft: this.insertOutreachDraft(lead, draftContent, generatedAt),
+      reusedExisting: false,
     };
   }
 
@@ -938,6 +970,33 @@ export class PrototypeStore {
       .get(normalizedCompanyDomain) as DeveloperSignupRow | null;
 
     return row ? mapDeveloperSignupRow(row) : null;
+  }
+
+  private findActiveEnrichmentRunForCompany(companyId: string): EnrichmentRun | null {
+    const row = this.database
+      .query(
+        `
+          SELECT
+            sequence,
+            id,
+            developer_signup_id,
+            company_id,
+            normalized_company_domain,
+            status,
+            requested_at,
+            started_at,
+            finished_at,
+            failure_reason
+          FROM enrichment_runs
+          WHERE company_id = ?
+            AND status IN ('pending', 'researching')
+          ORDER BY sequence DESC
+          LIMIT 1
+        `,
+      )
+      .get(companyId) as EnrichmentRunRow | null;
+
+    return row ? mapEnrichmentRunRow(row) : null;
   }
 
   private createEnrichmentRun(
@@ -1496,10 +1555,10 @@ function buildTemplateDraftContent(
       body: [
         `Hi ${content.company.name} team,`,
         "",
-        `A developer from ${content.company.domain} signed up for Parallel.`,
-        "I do not yet have enough Evidence Basis to personalize this confidently, so I would keep the first touch exploratory.",
-        "",
-        `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+        `A developer from ${content.company.domain} signed up for Parallel, which is a signal worth noticing but not enough evidence to personalize confidently.`,
+        "I would treat this as the opening chapter: someone may be exploring how to turn research and enrichment into API-backed automation, but the right first move is to learn what workflow they are trying to improve.",
+        content.salesSignals.suggestedNextAction,
+        "If useful, I can share a lightweight example of how Parallel turns a raw signup into a researched account narrative.",
       ].join("\n"),
       evidenceReferences,
     };
@@ -1509,25 +1568,50 @@ function buildTemplateDraftContent(
     content.outreachSeed.personalizationAngles[0] ??
     content.salesSignals.keyReasons[0] ??
     "developer infrastructure";
-  const evidenceLine =
-    evidenceReferences.length > 0
-      ? `Evidence used: ${evidenceReferences.join("; ")}.`
-      : "Evidence used: none returned yet.";
+  const reasons = formatInlineList(content.salesSignals.keyReasons);
+  const evidenceSignal =
+    evidenceReferences[0] ?? content.technicalSignals.computeIntensity;
 
   return {
     status: "ready",
-    subject: `${content.company.name} and Parallel`,
+    subject: `${formatPossessive(content.company.name)} ${formatSubjectAngle(primaryAngle)} story`,
     body: [
       `Hi ${content.company.name} team,`,
       "",
-      `I noticed ${content.company.name}'s work around ${primaryAngle}. Parallel helps teams turn research and enrichment workflows into reliable API-backed automation.`,
-      "",
-      `Apex flagged this Lead because ${content.salesSignals.keyReasons.join(", ")}.`,
-      evidenceLine,
-      `Suggested next action: ${content.salesSignals.suggestedNextAction}`,
+      `A developer from ${content.company.domain} signed up for Parallel, and the timing looks interesting: ${content.company.name} is already telling a story around ${primaryAngle}.`,
+      "That usually creates a second problem behind the product story: the GTM team needs to spot the right accounts, understand why the signal matters, and move fast without hand-building every brief.",
+      "Parallel helps teams turn account research into API-backed workflows, so a signup like this can become a grounded account narrative instead of another row in a CRM.",
+      `The strongest signal I found is ${evidenceSignal}, alongside ${reasons}.`,
+      "Would it be worth comparing notes on how Parallel could help your team turn these research signals into cleaner sales motion?",
     ].join("\n"),
     evidenceReferences,
   };
+}
+
+function formatPossessive(value: string): string {
+  return value.endsWith("s") ? `${value}'` : `${value}'s`;
+}
+
+function formatSubjectAngle(value: string): string {
+  const trimmed = value.trim().replace(/\s+scaling$/i, "");
+
+  return trimmed.length > 0 ? trimmed : "developer infrastructure";
+}
+
+function formatInlineList(values: string[]): string {
+  const cleaned = values
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+
+  if (cleaned.length === 0) {
+    return "the signup activity";
+  }
+
+  if (cleaned.length === 1) {
+    return cleaned[0];
+  }
+
+  return `${cleaned.slice(0, -1).join(", ")} and ${cleaned[cleaned.length - 1]}`;
 }
 
 function isWeakOutreachEvidence(
@@ -1588,7 +1672,7 @@ function parseManualRefreshPayload(payload: unknown):
 }
 
 function parseOutreachDraftPayload(payload: unknown):
-  | { ok: true; normalizedCompanyDomain: string }
+  | { ok: true; normalizedCompanyDomain: string; regenerate: boolean }
   | { ok: false; status: 400; body: OutreachDraftError } {
   if (!isRecord(payload)) {
     return invalidOutreachDraftDomain();
@@ -1605,7 +1689,22 @@ function parseOutreachDraftPayload(payload: unknown):
   return {
     ok: true,
     normalizedCompanyDomain,
+    regenerate: parseOptionalBoolean(payload.regenerate),
   };
+}
+
+function parseOptionalBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
 function parseNormalizedCompanyDomain(value: unknown): string | null {

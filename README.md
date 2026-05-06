@@ -1,85 +1,71 @@
 # Apex
 
-Apex turns developer signups into a focused sales queue.
+## What
 
-## What It Is
+Apex is a local sales prototype for Parallel.
 
-Apex is an internal prototype for spotting promising company leads from developer signup emails.
+It turns a developer signup email into a company lead. When someone signs up with an email like `engineer@modal.com`, Apex finds the company domain, researches the company, scores the lead, shows the reasons behind the score, and helps draft a sales email.
 
-For example, when someone signs up with `engineer@modal.com`, Apex treats the company domain as the starting point, runs fixture-backed or live enrichment, scores the resulting Lead, and shows the evidence behind that score in the sales dashboard.
+The dashboard is built for a simple sales flow:
 
-The current build includes the WSL-native Bun app foundation, the Apex Dashboard, demo signup intake, a SQLite-backed Prototype Store, the asynchronous Enrichment Run lifecycle, live Core2x wiring, fixture-backed fake enrichment for local demos, evidence-aware Lead Score calculation, seven-day Freshness Window controls with manual refresh, sortable Lead Queue prioritization, selected Lead detail, Mock CRM Fields, raw structured enrichment inspection, evidence-backed Outreach Draft generation, and a scripted WSL demo verifier for the full Apex story.
+- see which companies signed up
+- spot the best leads first
+- review the evidence behind each lead
+- refresh company research when needed
+- write or rewrite a sales email for Parallel
 
-## Why It Exists
+It can run with local demo data or with a live Parallel API key.
 
-Sales teams can miss valuable companies when thousands of developers sign up on free or low-cost tiers. Manually researching every signup is slow and expensive.
+## Why
 
-Apex is meant to make that first pass easier:
+Good company opportunities can hide inside normal developer signups. A single engineer using a free or trial account may work at a company that is growing fast, spending on compute, or building products that fit Parallel well.
 
-- show new company leads in one place
-- make high-priority leads easy to spot
-- keep the evidence behind each lead visible
-- run locally in WSL while the prototype is being built
+Researching each signup by hand is slow. Apex gives the sales team a faster first pass:
 
-## How To Run It
+- it groups signups by company
+- it avoids doing the same research twice while a company is already being researched
+- it keeps older research until it is stale
+- it explains why a lead is worth attention
+- it drafts outreach that sounds like a sales story, not a data dump
 
-All commands should run inside WSL from this repo:
+The goal is not to replace a salesperson. The goal is to help them quickly decide who is worth reaching out to and what story to tell.
+
+## How
+
+Run everything from this repo inside WSL:
 
 ```bash
 cd /home/srinivas/workspace/github.com/sivaratrisrinivas/apex
-```
-
-Use the Bun installation already configured in WSL:
-
-```bash
-bun --version
-```
-
-If a non-interactive shell has not picked up the WSL Bun path yet, load your shell profile:
-
-```bash
-source ~/.bashrc
-```
-
-You can also call Bun directly from its WSL install path:
-
-```bash
-/home/srinivas/.bun/bin/bun --version
-```
-
-Install dependencies:
-
-```bash
 bun install
-```
-
-Run tests:
-
-```bash
 bun test
-```
-
-Run the full WSL demo verification:
-
-```bash
-bun run demo:wsl
-```
-
-Start the dashboard:
-
-```bash
 bun run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Open the dashboard:
 
-If port 3000 is already in use, choose another WSL-local port:
+```text
+http://localhost:3000
+```
+
+If port `3000` is busy, use another port:
 
 ```bash
 PORT=3010 bun run dev
 ```
 
-Submit a Demo Signup Payload:
+For a local demo with no live API key:
+
+```bash
+APEX_ENRICHMENT_MODE=fake bun run dev
+```
+
+You can also run the scripted demo:
+
+```bash
+bun run demo:wsl
+```
+
+Submit a demo signup:
 
 ```bash
 curl -s http://localhost:3000/demo-signups \
@@ -87,25 +73,7 @@ curl -s http://localhost:3000/demo-signups \
   -d '{"email":"engineer@modal.com","name":"Ada Lovelace"}'
 ```
 
-The response includes the stored Developer Signup and, for qualified company domains, the pending Enrichment Run that was created for that Company. The dashboard then advances the run to `researching` asynchronously so signup intake stays responsive while research is still in progress.
-
-Use fixture-backed fake enrichment for a complete WSL-local demo without live Parallel credentials:
-
-```bash
-APEX_ENRICHMENT_MODE=fake bun run dev
-```
-
-For a scripted end-to-end demo that does not require opening a browser or using any Windows-specific commands, run:
-
-```bash
-bun run demo:wsl
-```
-
-The script uses fake enrichment to submit `engineer@modal.com`, observe the acknowledged pending **Enrichment Run**, verify the completed **Lead Queue** entry and **Evidence Basis**, generate an evidence-backed **Outreach Draft**, and print a short success transcript.
-
-The fake path exercises the same Enrichment Run lifecycle as the live worker. `engineer@modal.com` produces a completed, evidence-backed Company Enrichment, while `founder@runpod.io` produces a lower-confidence Partial Enrichment.
-
-After fake enrichment completes, generate an Outreach Draft for the resulting Lead:
+Generate a sales draft for a company that already has research:
 
 ```bash
 curl -s http://localhost:3000/outreach-drafts \
@@ -113,126 +81,24 @@ curl -s http://localhost:3000/outreach-drafts \
   -d '{"normalizedCompanyDomain":"modal.com"}'
 ```
 
-The dashboard also shows a **Generate Outreach Draft** action in the selected Lead detail panel once a Lead has a completed or partial Company Enrichment.
-
-## Freshness Window and Manual Refresh
-
-Apex reuses a fresh **Company Enrichment** for later **Developer Signups** from the same **Company** when the latest enrichment is no more than seven days old. Reuse avoids unnecessary Parallel spend while still preserving the new Developer Signup and updating the single active Lead Queue record with signup count, latest signup, Sales Timing, and Lead Score.
-
-When the latest Company Enrichment is older than the seven-day **Freshness Window**, a later qualified signup starts a new **Enrichment Run**. The Lead remains visible in the queue and shows the latest run status while new research is in progress.
-
-The selected Lead detail panel includes a **Manual refresh** action for demo control. It forces a new Enrichment Run for the selected Normalized Company Domain even when the existing enrichment is still fresh.
-
-You can also trigger the same refresh endpoint from WSL:
+Ask Apex to rewrite that draft:
 
 ```bash
-curl -i http://localhost:3000/manual-refreshes \
-  -H 'content-type: application/x-www-form-urlencoded' \
-  -d 'normalizedCompanyDomain=modal.com'
+curl -s http://localhost:3000/outreach-drafts \
+  -H 'content-type: application/json' \
+  -d '{"normalizedCompanyDomain":"modal.com","regenerate":true}'
 ```
 
-Form submissions redirect back to `/`; JSON-style callers receive the created Enrichment Run payload.
-
-## Lead Scoring
-
-Completed and partial Company Enrichments produce a Lead Score from the agreed Apex dimensions:
-
-- Purchasing Capacity
-- Compute Intensity
-- Parallel Fit
-- Sales Timing
-- Evidence Confidence
-
-The Prototype Store persists the numeric Lead Score, the score breakdown, and the top score reasons on the Lead Queue record. The dashboard shows the score in the queue and exposes the breakdown in the selected Lead detail panel.
-
-Partial Enrichments can still create scored Leads when the Company identity is usable. Missing or weaker evidence lowers Evidence Confidence instead of failing the Enrichment Run. Apex also caps otherwise high-scoring Leads below the high-score threshold when the Enrichment Run does not provide an Evidence Basis, so the dashboard does not display unsupported high-priority recommendations.
-
-## Outreach Drafts
-
-Outreach Drafts are generated only after a Lead exists and the Lead has a completed or partial Company Enrichment. Draft generation uses the Lead's Company Enrichment and Evidence Basis for personalization, then stores the draft in the Prototype Store without changing the Lead Score.
-
-Evidence-backed drafts include the evidence references used for personalization, such as the enriched field and citation title. When Evidence Confidence is low or no Evidence Basis is available, Apex creates a `needs-evidence` draft that avoids fake personalization and keeps the first touch exploratory.
-
-The selected Lead detail panel shows the latest Outreach Draft as editable subject and body fields, includes a copy button for the draft body, and lists the evidence references used. Form submissions from the dashboard redirect back to the selected Lead; JSON callers receive the created Outreach Draft payload.
-
-## Lead Queue Dashboard
-
-The Apex Dashboard opens directly on the Lead Queue rather than a landing page. Queue rows show the Company, Lead Score, Enrichment Status, key reasons, Evidence Confidence, signup count, latest signup, and Suggested Next Action so sales users can scan for immediate follow-up.
-
-By default, the Lead Queue prioritizes higher Lead Scores and uses recent signup activity as the tie-breaker. Use the dashboard sort controls, or open `/?sort=recent`, to prioritize recent Developer Signup activity first. Use `/?sort=score` to return to score-first priority.
-
-Selecting a Company from the queue opens that Lead in the detail panel with the score breakdown, top score reasons, Evidence Basis, and raw structured Company Enrichment. The detail panel also includes compact Mock CRM Fields such as Lifecycle Stage, Owner, Territory, and Last Activity so the prototype feels realistic without integrating Salesforce, HubSpot, or another CRM.
-
-## Prototype Store
-
-The running app keeps local demo data in a SQLite-backed Prototype Store at `.apex/prototype.sqlite`. The `.apex/` directory is ignored by git so prepared demo data and local experiments do not get committed.
-
-Use `APEX_PROTOTYPE_STORE_PATH` to point a demo at a different store file:
-
-```bash
-APEX_PROTOTYPE_STORE_PATH=/tmp/apex-demo.sqlite bun run dev
-```
-
-## Live Core2x Enrichment
-
-Apex starts live **Core2x Enrichment** when `PARALLEL_API_KEY` is available in the WSL environment or in `.env.local`. The live worker defaults to Parallel's `core2x-fast` processor so the prototype keeps Core2x-level structured enrichment while preserving a responsive demo loop.
-
-Create `.env.local` in the repo root:
+Use live Parallel research by adding a Parallel API key to `.env.local`:
 
 ```bash
 PARALLEL_API_KEY=...
-# Optional:
-# PARALLEL_API_BASE_URL=https://api.parallel.ai
 ```
 
-`.env.local` is ignored by git. Shell environment variables still win over values in `.env.local`, so you can temporarily override a local value without editing the file.
-
-Then start the app without fake mode:
+Then start the app normally:
 
 ```bash
 bun run dev
 ```
 
-Without `PARALLEL_API_KEY` in the shell or `.env.local`, and without `APEX_ENRICHMENT_MODE=fake`, qualified **Enrichment Runs** stay visible as `researching` so the dashboard can still demonstrate **Near-Real-Time Enrichment** state without live credentials. `PARALLEL_API_BASE_URL` can point the client at a non-production Parallel-compatible endpoint for local verification.
-
-Use `APEX_ENRICHMENT_MODE=fake` or `bun run demo:wsl` when you need deterministic WSL-local demos with no live API dependency. Use live Parallel credentials when you want to verify real **Core2x Enrichment** behavior against the Parallel Task API.
-
-Qualified Developer Signups create or reuse one Company per Normalized Company Domain and create an Enrichment Run with an explicit Enrichment Status. Repeated signups from the same Company are preserved individually while updating the single active Lead Queue record with signup count, latest-signup urgency signals, and the latest run status.
-
-Fresh Company Enrichments are reused inside the seven-day Freshness Window. Stale enrichments and manual refresh requests create new Enrichment Runs for the same Company without duplicating the active Lead.
-
-The local server records runs as `researching` until the configured enrichment worker finishes. The live Parallel path stores completed **Company Enrichments** and **Evidence Basis** from the Task API result; API errors produce a failed **Enrichment Status** with the visible failure reason. The app-level enrichment worker interface also supports fake workers for tests and local fixture-backed demos.
-
-## Current Status
-
-This repo currently has:
-
-- a Bun server that serves the Apex Dashboard at `/`
-- a demo endpoint at `POST /demo-signups` for Demo Signup Payload intake
-- a manual refresh endpoint at `POST /manual-refreshes` for forcing a new Enrichment Run
-- an outreach endpoint at `POST /outreach-drafts` for generating Outreach Drafts from existing Leads
-- domain classification for qualified Developer Signups and visible Unqualified Signups
-- a SQLite-backed Prototype Store that persists Developer Signups, Companies, Enrichment Runs, Lead Queue records, Company Enrichments, Lead Scores, and Outreach Drafts
-- Company deduplication by Normalized Company Domain, while preserving every Developer Signup
-- one active Lead Queue record per Company with signup count and latest-signup urgency signals
-- seven-day Freshness Window reuse for fresh Company Enrichments, with stale signups starting new Enrichment Runs
-- a dashboard Manual refresh action for selected Leads
-- asynchronous Enrichment Run creation and status transitions for `pending`, `researching`, `completed`, `partial`, and `failed`
-- recoverable Enrichment Runs that resume from the Prototype Store when a configured worker is available after restart
-- live Core2x Parallel Task API wiring via `core2x-fast` when `PARALLEL_API_KEY` is set in the shell or `.env.local`
-- Partial Enrichment fallback when Parallel returns usable Company identity with missing non-critical fields
-- fixture-backed fake enrichment with completed and partial Company Enrichment results when `APEX_ENRICHMENT_MODE=fake`
-- persisted Company Enrichments and Evidence Basis for completed live or fake worker results
-- Lead Score calculation from Purchasing Capacity, Compute Intensity, Parallel Fit, Sales Timing, and Evidence Confidence
-- persisted score breakdowns and top score reasons on Lead Queue records
-- a high-score evidence gate that prevents unsupported high Lead Scores from being displayed
-- evidence-backed Outreach Draft generation that stays independent from Lead Score
-- WSL demo verification via `bun run demo:wsl`
-- weak-evidence Outreach Draft fallback that avoids fake personalization
-- score-first and recent-signup Lead Queue sorting
-- selectable Lead detail panels with score breakdown, Evidence Basis, Mock CRM Fields, editable/copyable Outreach Drafts, and raw structured Company Enrichment
-- live dashboard refresh while active Enrichment Runs are progressing under a configured worker
-- visible `unqualified` status for Unqualified Signups without starting research
-- a styled dashboard with a lead queue, selected lead detail panel, and visible signup intake history
-- automated tests for the dashboard route, dashboard Lead Queue behavior, demo signup validation, domain classification, persistence, deduplication, Lead Queue urgency signals, Enrichment Run lifecycle behavior, Freshness Window behavior, fake enrichment, Lead Score behavior, Outreach Draft behavior, and the WSL demo script
-- WSL-focused setup notes
+Local data is stored in `.apex/prototype.sqlite`. The `.apex/` folder is ignored by git, so demo data and local experiments stay on your machine.

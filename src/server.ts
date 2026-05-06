@@ -113,6 +113,22 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         );
       }
 
+      if (url.pathname === "/dashboard-state" && request.method === "GET") {
+        const enrichmentRuns = store.listEnrichmentRuns();
+        const latestRun = enrichmentRuns[0];
+
+        return jsonResponse(
+          {
+            activeEnrichmentRunCount: enrichmentRuns.filter((run) =>
+              isActiveEnrichmentStatus(run.status),
+            ).length,
+            latestRunStatus: latestRun?.status ?? null,
+            generatedAt: new Date().toISOString(),
+          },
+          200,
+        );
+      }
+
       if (url.pathname === "/demo-signups" && request.method === "POST") {
         console.log(`[apex] ← POST /demo-signups`);
         const isFormPost = isUrlEncodedFormPost(request);
@@ -143,7 +159,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
             );
           });
         } else {
-          console.log(`[apex]   ↳ No enrichment run needed (fresh enrichment exists or signup unqualified)`);
+          console.log(`[apex]   ↳ No enrichment run needed (fresh enrichment, active run, or unqualified signup)`);
         }
 
         if (isFormPost) {
@@ -178,7 +194,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         }
 
         const draft = result.outreachDraft;
-        console.log(`[apex]   ✓ Outreach draft generated: ${draft.companyName} (${draft.status})`);
+        console.log(`[apex]   ✓ Outreach draft ${result.reusedExisting ? "reused" : "generated"}: ${draft.companyName} (${draft.status})`);
         console.log(`[apex]   ↳ Subject: ${draft.subject}`);
         console.log(`[apex]   ↳ Evidence refs: ${draft.evidenceReferences.length}`);
 
@@ -186,7 +202,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           return new Response(null, {
             status: 303,
             headers: {
-              location: `/?lead=${encodeURIComponent(result.outreachDraft.normalizedCompanyDomain)}`,
+              location: `/?view=draft&lead=${encodeURIComponent(result.outreachDraft.normalizedCompanyDomain)}`,
             },
           });
         }
@@ -194,8 +210,9 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         return jsonResponse(
           {
             outreachDraft: result.outreachDraft,
+            reusedExisting: result.reusedExisting,
           },
-          201,
+          result.reusedExisting ? 200 : 201,
         );
       }
 
@@ -266,6 +283,10 @@ function parseDashboardView(value: string | null):
   }
 
   return undefined;
+}
+
+function isActiveEnrichmentStatus(status: EnrichmentRun["status"]): boolean {
+  return status === "pending" || status === "researching";
 }
 
 function resolveEnrichmentWorker(

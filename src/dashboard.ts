@@ -45,12 +45,13 @@ export function renderDashboard(options: DashboardOptions = {}): string {
   <body>
     <main class="shell">
       <header>
-        <div class="brand">Apex <span style="font-weight:400;font-size:11px;opacity:0.5;margin-left:8px">WSL local</span></div>
+        <div class="brand">Apex <span class="env-badge">WSL local</span></div>
         <h1>${formatHeadline(activeView, selectedLead)}</h1>
         <p>${formatSubheadline(activeView, selectedLead, leadQueue)}</p>
       </header>
 
       ${formatFocusTabs(activeView, selectedLead)}
+      ${formatLiveStatus(liveRefreshEnabled)}
 
       <!-- Intake -->
       <section class="moment${activeView === "intake" ? " is-active" : ""}" id="moment-intake">
@@ -60,14 +61,14 @@ export function renderDashboard(options: DashboardOptions = {}): string {
             <p>Paste a developer signup email to begin enrichment.</p>
           </div>
           <div class="intake-body">
-            <form method="post" action="/demo-signups">
+            <form method="post" action="/demo-signups" data-disable-on-submit>
               <div class="field-group">
                 <label>Email<input type="email" name="email" placeholder="engineer@company.com" required /></label>
                 <label>Name <span style="color:var(--faint)">(optional)</span><input type="text" name="name" placeholder="Jane Smith" /></label>
                 <label>Source <span style="color:var(--faint)">(optional)</span><input type="text" name="source" value="manual" /></label>
               </div>
-              <div style="align-self:end">
-                <button type="submit" class="btn-primary">Enrich</button>
+              <div class="form-actions">
+                <button type="submit" class="btn-primary" data-pending-text="Starting">Enrich</button>
               </div>
             </form>
           </div>
@@ -105,19 +106,7 @@ export function renderDashboard(options: DashboardOptions = {}): string {
       </section>
     </main>
 
-    <script>
-      document.addEventListener('click', function(e) {
-        var btn = e.target.closest('[data-copy-outreach]');
-        if (!btn) return;
-        var ta = document.getElementById(btn.dataset.copyOutreach);
-        if (!ta) return;
-        navigator.clipboard.writeText(ta.value);
-        var orig = btn.textContent;
-        btn.textContent = 'Copied';
-        setTimeout(function() { btn.textContent = orig; }, 1400);
-      });
-    </script>
-    ${formatLiveRefreshScript(liveRefreshEnabled)}
+    ${formatDashboardScripts(liveRefreshEnabled)}
   </body>
 </html>`;
 }
@@ -304,9 +293,10 @@ function formatDraftMoment(lead: LeadQueueRecord): string {
   if (!lead.outreachDraft) {
     return `<div class="panel draft-editor">
       <h2>${esc(lead.companyName)} outreach</h2>
-      <form method="post" action="/outreach-drafts">
+      <p class="draft-helper">Generate once from the latest enrichment, then edit the copy here.</p>
+      <form method="post" action="/outreach-drafts" class="draft-generate" data-disable-on-submit>
         <input type="hidden" name="normalizedCompanyDomain" value="${esc(lead.normalizedCompanyDomain)}" />
-        <button type="submit" class="btn-teal">Generate Outreach Draft</button>
+        <button type="submit" class="btn-teal" data-pending-text="Generating">Generate Outreach Draft</button>
       </form>
     </div>`;
   }
@@ -328,6 +318,7 @@ function formatDraftMoment(lead: LeadQueueRecord): string {
       <div class="draft-actions">
         <button type="button" class="btn-primary" data-copy-outreach="${esc(textareaId)}">Copy draft</button>
         <button type="button" class="btn-ghost" onclick="document.getElementById('${esc(textareaId)}').select()">Select all</button>
+        ${formatRewriteDraftAction(lead)}
       </div>
       ${refs.length > 0 ? `
         <div class="draft-refs">
@@ -360,6 +351,7 @@ function formatOutreachInDetail(lead: LeadQueueRecord): string {
         </div>
         <div class="draft-actions">
           <button type="button" class="btn-primary" data-copy-outreach="${esc(textareaId)}">Copy draft</button>
+          ${formatRewriteDraftAction(lead)}
         </div>
         ${refs.length > 0 ? `<ul>${refs.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
       </div>
@@ -414,10 +406,28 @@ function formatSignupQualification(signup: DeveloperSignup): string {
 }
 
 function formatManualRefreshAction(lead: LeadQueueRecord): string {
+  if (isActiveEnrichmentStatus(lead.enrichmentStatus)) {
+    return `
+    <div class="run-guard" aria-live="polite">
+      <b>Research in progress</b>
+      <span>Refresh is locked until the active enrichment run finishes.</span>
+    </div>`;
+  }
+
   return `
-    <form method="post" action="/manual-refreshes" style="margin-top:8px">
+    <form method="post" action="/manual-refreshes" class="manual-refresh-form" data-disable-on-submit data-confirm="Start a new enrichment run for ${esc(lead.normalizedCompanyDomain)}?">
       <input type="hidden" name="normalizedCompanyDomain" value="${esc(lead.normalizedCompanyDomain)}" />
-      <button type="submit" class="btn-ghost" style="width:100%">Manual refresh</button>
+      <button type="submit" class="btn-ghost btn-full" data-pending-text="Starting run">Re-run enrichment</button>
+      <p class="action-note">Starts a fresh Parallel run for this Company.</p>
+    </form>`;
+}
+
+function formatRewriteDraftAction(lead: LeadQueueRecord): string {
+  return `
+    <form method="post" action="/outreach-drafts" class="inline-action-form" data-disable-on-submit data-confirm="Rewrite the outreach draft for ${esc(lead.normalizedCompanyDomain)}?">
+      <input type="hidden" name="normalizedCompanyDomain" value="${esc(lead.normalizedCompanyDomain)}" />
+      <input type="hidden" name="regenerate" value="true" />
+      <button type="submit" class="btn-ghost" data-pending-text="Rewriting">Rewrite draft</button>
     </form>`;
 }
 
@@ -446,16 +456,109 @@ function formatEmpty(msg: string): string {
   return `<div class="panel"><div class="empty"><p>${esc(msg)}</p></div></div>`;
 }
 
-function formatLiveRefreshScript(enabled: boolean): string {
+function formatLiveStatus(enabled: boolean): string {
   if (!enabled) return "";
 
   return `
-    <script data-apex-live-refresh>
-      window.setTimeout(function() {
-        if (document.visibilityState === 'visible') {
-          window.location.reload();
+    <div class="live-status" data-live-status role="status" aria-live="polite">
+      <span class="live-status-dot" aria-hidden="true"></span>
+      <div class="live-status-copy">
+        <b data-live-status-label>Research running</b>
+        <span data-live-status-detail>The dashboard is checking status quietly in the background.</span>
+      </div>
+      <a class="live-status-action" data-live-status-action href="/" hidden>View latest</a>
+    </div>`;
+}
+
+function formatDashboardScripts(statusPollingEnabled: boolean): string {
+  const statusPollingScript = statusPollingEnabled
+    ? `
+      var statusBanner = document.querySelector('[data-live-status]');
+      if (statusBanner) {
+        var statusLabel = statusBanner.querySelector('[data-live-status-label]');
+        var statusDetail = statusBanner.querySelector('[data-live-status-detail]');
+        var statusAction = statusBanner.querySelector('[data-live-status-action]');
+        if (statusAction) {
+          statusAction.href = window.location.pathname + window.location.search;
         }
-      }, 2500);
+
+        var updateStatus = function(state) {
+          var activeCount = Number(state.activeEnrichmentRunCount || 0);
+          if (activeCount > 0) {
+            if (statusLabel) {
+              statusLabel.textContent = activeCount === 1 ? 'Research running' : activeCount + ' research runs active';
+            }
+            if (statusDetail) {
+              statusDetail.textContent = 'Latest run status: ' + (state.latestRunStatus || 'researching') + '.';
+            }
+            window.setTimeout(pollStatus, 4500);
+            return;
+          }
+
+          statusBanner.dataset.state = 'complete';
+          if (statusLabel) statusLabel.textContent = 'Research complete';
+          if (statusDetail) statusDetail.textContent = 'Latest enrichment is ready to review.';
+          if (statusAction) statusAction.hidden = false;
+        };
+
+        var pollStatus = function() {
+          if (document.visibilityState !== 'visible') {
+            window.setTimeout(pollStatus, 7000);
+            return;
+          }
+
+          fetch('/dashboard-state', { headers: { accept: 'application/json' } })
+            .then(function(response) {
+              if (!response.ok) throw new Error('status failed');
+              return response.json();
+            })
+            .then(updateStatus)
+            .catch(function() {
+              window.setTimeout(pollStatus, 7000);
+            });
+        };
+
+        window.setTimeout(pollStatus, 2500);
+      }
+`
+    : "";
+
+  return `
+    <script${statusPollingEnabled ? " data-apex-status-poll" : ""}>
+      document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-copy-outreach]');
+        if (!btn) return;
+        var ta = document.getElementById(btn.dataset.copyOutreach);
+        if (!ta) return;
+        navigator.clipboard.writeText(ta.value);
+        var orig = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(function() { btn.textContent = orig; }, 1400);
+      });
+
+      document.addEventListener('submit', function(e) {
+        var form = e.target.closest('form[data-disable-on-submit]');
+        if (!form) return;
+        var confirmMessage = form.dataset.confirm;
+        if (confirmMessage && !window.confirm(confirmMessage)) {
+          e.preventDefault();
+          return;
+        }
+
+        if (form.dataset.submitting === 'true') {
+          e.preventDefault();
+          return;
+        }
+
+        form.dataset.submitting = 'true';
+        var submitter = e.submitter || form.querySelector('button[type="submit"]');
+        if (submitter) {
+          submitter.disabled = true;
+          submitter.dataset.originalText = submitter.textContent || '';
+          submitter.textContent = submitter.dataset.pendingText || 'Working';
+        }
+      });
+${statusPollingScript}
     </script>`;
 }
 

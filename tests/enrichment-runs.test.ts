@@ -73,7 +73,22 @@ describe("Enrichment Run lifecycle", () => {
 
     expect(html).toContain("researching");
     expect(html).not.toContain(">failed<");
-    expect(html).toContain("data-apex-live-refresh");
+    expect(html).toContain("data-apex-status-poll");
+    expect(html).not.toContain("window.location.reload");
+
+    const statusResponse = await app.fetch(
+      new Request("http://localhost/dashboard-state"),
+    );
+    const statusBody = (await statusResponse.json()) as {
+      activeEnrichmentRunCount: number;
+      latestRunStatus: string;
+    };
+
+    expect(statusResponse.status).toBe(200);
+    expect(statusBody).toMatchObject({
+      activeEnrichmentRunCount: 1,
+      latestRunStatus: "researching",
+    });
 
     completion.resolve({ status: "completed" });
     await waitForBackgroundWork();
@@ -101,7 +116,8 @@ describe("Enrichment Run lifecycle", () => {
 
     expect(html).toContain('data-status="researching">researching</mark>');
     expect(html).not.toContain('data-status="failed">failed</mark>');
-    expect(html).not.toContain("data-apex-live-refresh");
+    expect(html).not.toContain("data-apex-status-poll");
+    expect(html).not.toContain("window.location.reload");
   });
 
   test("shows completed, partial, and failed Enrichment Status outcomes", async () => {
