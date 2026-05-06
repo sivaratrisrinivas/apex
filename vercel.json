@@ -3,6 +3,7 @@
   "bunVersion": "1.x",
   "installCommand": "bun install",
   "buildCommand": "bun run typecheck",
+  "outputDirectory": "public",
   "functions": {
     "api/index.ts": {
       "maxDuration": 300,
