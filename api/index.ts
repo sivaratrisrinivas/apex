@@ -47,5 +47,5 @@ function rewriteVercelRequest(request: Request): Request {
   url.pathname = apexPath.trim().length > 0 ? `/${apexPath}` : "/";
   url.searchParams.delete("apexPath");
 
-  return new Request(url, request);
+  return new Request(url.toString(), request);
 }
