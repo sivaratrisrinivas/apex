@@ -14,7 +14,7 @@ The dashboard is built for a simple sales flow:
 - refresh company research when needed
 - write or rewrite a sales email for Parallel
 
-It can run with local demo data or with a live Parallel API key.
+It can run on your machine with local demo data, or on Vercel with a small private demo state file.
 
 ## Why
 
@@ -89,7 +89,7 @@ curl -s http://localhost:3000/outreach-drafts \
   -d '{"normalizedCompanyDomain":"modal.com","regenerate":true}'
 ```
 
-Use live Parallel research by adding a Parallel API key to `.env.local`:
+Use live Parallel research on your machine by adding a Parallel API key to `.env.local`:
 
 ```bash
 PARALLEL_API_KEY=...
@@ -102,3 +102,14 @@ bun run dev
 ```
 
 Local data is stored in `.apex/prototype.sqlite`. The `.apex/` folder is ignored by git, so demo data and local experiments stay on your machine.
+
+To deploy the demo on Vercel:
+
+1. Create a Vercel project from this repo.
+2. Create a private Vercel Blob store from the project Storage tab.
+3. Keep the `BLOB_READ_WRITE_TOKEN` that Vercel adds to the project.
+4. Add `PARALLEL_API_KEY` for live company research.
+5. Add `GEMINI_API_KEY` if you want Gemini-written sales drafts.
+6. Deploy.
+
+On Vercel, Apex stores demo state in one private Blob file instead of the local SQLite file. This is enough for a demo, but it is not meant for many people editing leads at the same time.

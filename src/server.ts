@@ -26,22 +26,29 @@ export type EnrichmentWorker = (
 
 export interface CreateAppOptions {
   prototypeStorePath?: string;
+  store?: PrototypeStore;
   enrichmentWorker?: EnrichmentWorker | null;
   parallelTaskClient?: ParallelTaskClient;
   outreachDraftWriter?: OutreachDraftWriter | null;
   env?: Record<string, string | undefined>;
+  recoverActiveRuns?: boolean;
+  deferTask?: (task: () => Promise<void>) => void;
+  onStoreChanged?: () => void | Promise<void>;
 }
 
 export function createApp(options: CreateAppOptions = {}): ApexApp {
   const env = options.env ?? process.env;
-  const store = new PrototypeStore({
-    databasePath: options.prototypeStorePath,
-  });
+  const store =
+    options.store ??
+    new PrototypeStore({
+      databasePath: options.prototypeStorePath,
+    });
   const configuredEnrichmentWorker = resolveEnrichmentWorker(options);
   const draftWriter = resolveOutreachDraftWriter(options);
+  const recoverActiveRuns = options.recoverActiveRuns ?? true;
   console.log(`[apex] App created · enrichment worker: ${configuredEnrichmentWorker ? "configured" : "none (enrichment will be skipped)"}`);
 
-  if (configuredEnrichmentWorker) {
+  if (configuredEnrichmentWorker && recoverActiveRuns) {
     const recoverableRuns = store.listRecoverableEnrichmentRuns();
 
     if (recoverableRuns.length > 0) {
@@ -49,12 +56,13 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
     }
 
     for (const enrichmentRun of recoverableRuns) {
-      queueMicrotask(() => {
-        void runEnrichmentRun(
+      scheduleDeferredTask(options, async () => {
+        await runEnrichmentRun(
           store,
           enrichmentRun.id,
           configuredEnrichmentWorker,
         );
+        await notifyStoreChanged(options);
       });
     }
   }
@@ -151,15 +159,18 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           const enrichmentRunId = result.enrichmentRun.id;
           console.log(`[apex]   ↳ Enrichment run queued: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
-          queueMicrotask(() => {
-            void runEnrichmentRun(
+          await notifyStoreChanged(options);
+          scheduleDeferredTask(options, async () => {
+            await runEnrichmentRun(
               store,
               enrichmentRunId,
               configuredEnrichmentWorker,
             );
+            await notifyStoreChanged(options);
           });
         } else {
           console.log(`[apex]   ↳ No enrichment run needed (fresh enrichment, active run, or unqualified signup)`);
+          await notifyStoreChanged(options);
         }
 
         if (isFormPost) {
@@ -197,6 +208,9 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         console.log(`[apex]   ✓ Outreach draft ${result.reusedExisting ? "reused" : "generated"}: ${draft.companyName} (${draft.status})`);
         console.log(`[apex]   ↳ Subject: ${draft.subject}`);
         console.log(`[apex]   ↳ Evidence refs: ${draft.evidenceReferences.length}`);
+        if (!result.reusedExisting) {
+          await notifyStoreChanged(options);
+        }
 
         if (isFormPost) {
           return new Response(null, {
@@ -231,12 +245,14 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         const enrichmentRunId = result.enrichmentRun.id;
         console.log(`[apex]   ✓ Manual refresh: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
-        queueMicrotask(() => {
-          void runEnrichmentRun(
+        await notifyStoreChanged(options);
+        scheduleDeferredTask(options, async () => {
+          await runEnrichmentRun(
             store,
             enrichmentRunId,
             configuredEnrichmentWorker,
           );
+          await notifyStoreChanged(options);
         });
 
         if (isFormPost) {
@@ -259,6 +275,23 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       return new Response("Not found", { status: 404 });
     },
   };
+}
+
+function scheduleDeferredTask(
+  options: CreateAppOptions,
+  task: () => Promise<void>,
+): void {
+  const deferTask = options.deferTask ?? ((deferredTask) => {
+    queueMicrotask(() => {
+      void deferredTask();
+    });
+  });
+
+  deferTask(task);
+}
+
+async function notifyStoreChanged(options: CreateAppOptions): Promise<void> {
+  await options.onStoreChanged?.();
 }
 
 function parseLeadQueueSort(value: string | null): LeadQueueSort {

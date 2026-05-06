@@ -198,6 +198,24 @@ interface PrototypeStoreOptions {
   databasePath?: string;
 }
 
+export type PrototypeStoreSnapshotRow = Record<
+  string,
+  string | number | null
+>;
+
+export type PrototypeStoreSnapshotTable =
+  | "developer_signups"
+  | "companies"
+  | "leads"
+  | "enrichment_runs"
+  | "company_enrichments"
+  | "outreach_drafts";
+
+export interface PrototypeStoreSnapshot {
+  version: 1;
+  tables: Record<PrototypeStoreSnapshotTable, PrototypeStoreSnapshotRow[]>;
+}
+
 interface DeveloperSignupRow {
   id: string;
   email: string;
@@ -282,6 +300,89 @@ interface OutreachDraftRow {
   updated_at: string;
 }
 
+const SNAPSHOT_TABLES_IN_RESTORE_ORDER: PrototypeStoreSnapshotTable[] = [
+  "developer_signups",
+  "companies",
+  "leads",
+  "enrichment_runs",
+  "company_enrichments",
+  "outreach_drafts",
+];
+
+const SNAPSHOT_TABLES_IN_DELETE_ORDER = [
+  ...SNAPSHOT_TABLES_IN_RESTORE_ORDER,
+].reverse();
+
+const SNAPSHOT_TABLE_COLUMNS: Record<PrototypeStoreSnapshotTable, string[]> = {
+  developer_signups: [
+    "sequence",
+    "id",
+    "email",
+    "source",
+    "name",
+    "signed_up_at",
+    "normalized_company_domain",
+    "qualification",
+    "unqualified_reason",
+  ],
+  companies: [
+    "sequence",
+    "id",
+    "normalized_company_domain",
+    "created_at",
+  ],
+  leads: [
+    "sequence",
+    "id",
+    "company_id",
+    "enrichment_status",
+    "lead_score",
+    "score_breakdown_json",
+    "score_reasons_json",
+    "signup_count",
+    "latest_signup_at",
+    "created_at",
+  ],
+  enrichment_runs: [
+    "sequence",
+    "id",
+    "developer_signup_id",
+    "company_id",
+    "normalized_company_domain",
+    "status",
+    "requested_at",
+    "started_at",
+    "finished_at",
+    "failure_reason",
+  ],
+  company_enrichments: [
+    "sequence",
+    "id",
+    "company_id",
+    "enrichment_run_id",
+    "normalized_company_domain",
+    "status",
+    "company_name",
+    "content_json",
+    "evidence_basis_json",
+    "created_at",
+  ],
+  outreach_drafts: [
+    "sequence",
+    "id",
+    "lead_id",
+    "company_id",
+    "normalized_company_domain",
+    "company_name",
+    "status",
+    "subject",
+    "body",
+    "evidence_references_json",
+    "created_at",
+    "updated_at",
+  ],
+};
+
 export class PrototypeStore {
   private database: Database;
 
@@ -295,6 +396,46 @@ export class PrototypeStore {
     this.database = new Database(databasePath);
     this.database.run("PRAGMA foreign_keys = ON");
     this.migrate();
+  }
+
+  createSnapshot(): PrototypeStoreSnapshot {
+    return {
+      version: 1,
+      tables: Object.fromEntries(
+        SNAPSHOT_TABLES_IN_RESTORE_ORDER.map((tableName) => [
+          tableName,
+          this.database
+            .query(`SELECT * FROM ${tableName} ORDER BY sequence ASC`)
+            .all() as PrototypeStoreSnapshotRow[],
+        ]),
+      ) as Record<PrototypeStoreSnapshotTable, PrototypeStoreSnapshotRow[]>,
+    };
+  }
+
+  restoreSnapshot(snapshot: PrototypeStoreSnapshot): void {
+    for (const tableName of SNAPSHOT_TABLES_IN_DELETE_ORDER) {
+      this.database.run(`DELETE FROM ${tableName}`);
+    }
+
+    for (const tableName of SNAPSHOT_TABLES_IN_RESTORE_ORDER) {
+      for (const row of snapshot.tables[tableName]) {
+        const columnNames = SNAPSHOT_TABLE_COLUMNS[tableName].filter(
+          (columnName) => Object.hasOwn(row, columnName),
+        );
+        if (columnNames.length === 0) {
+          continue;
+        }
+
+        const placeholders = columnNames.map(() => "?").join(", ");
+        this.database.run(
+          `
+            INSERT INTO ${tableName} (${columnNames.join(", ")})
+            VALUES (${placeholders})
+          `,
+          columnNames.map((columnName) => row[columnName]),
+        );
+      }
+    }
   }
 
   createDeveloperSignup(payload: unknown): SignupIntakeResult {

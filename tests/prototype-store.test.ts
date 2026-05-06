@@ -103,4 +103,30 @@ describe("Prototype Store", () => {
     expect(html).toContain(">2<span>");
     expect(html).toContain("May 2, 2026");
   });
+
+  test("exports and restores a full demo snapshot for Vercel Blob storage", () => {
+    const sourceStore = new PrototypeStore();
+
+    sourceStore.createDeveloperSignup({
+      email: "engineer@modal.com",
+      name: "Ada Lovelace",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+    sourceStore.createDeveloperSignup({
+      email: "founder@gmail.com",
+      signedUpAt: "2026-05-01T11:00:00.000Z",
+    });
+
+    const restoredStore = new PrototypeStore();
+    restoredStore.restoreSnapshot(sourceStore.createSnapshot());
+
+    expect(restoredStore.listDeveloperSignups()).toEqual(
+      sourceStore.listDeveloperSignups(),
+    );
+    expect(restoredStore.listCompanies()).toEqual(sourceStore.listCompanies());
+    expect(restoredStore.listEnrichmentRuns()).toEqual(
+      sourceStore.listEnrichmentRuns(),
+    );
+    expect(restoredStore.listLeadQueue()).toEqual(sourceStore.listLeadQueue());
+  });
 });
