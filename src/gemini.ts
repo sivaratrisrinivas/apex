@@ -19,6 +19,8 @@ export type OutreachDraftWriter = (
   companyEnrichment: CompanyEnrichment,
 ) => Promise<OutreachDraftContent>;
 
+type GeminiGenerateContent = (request: unknown) => Promise<{ text?: string }>;
+
 const OUTREACH_SYSTEM_PROMPT = `You are an expert B2B sales development representative writing a short, personalized outreach email on behalf of Parallel — a developer infrastructure company that helps teams turn research and enrichment workflows into reliable API-backed automation.
 
 You will receive structured company enrichment data including:
@@ -88,9 +90,16 @@ const OUTREACH_DRAFT_RESPONSE_SCHEMA = {
 export function createGeminiDraftWriter(options: {
   apiKey: string;
   model?: string;
+  generateContent?: GeminiGenerateContent;
 }): OutreachDraftWriter {
   const ai = new GoogleGenAI({ apiKey: options.apiKey });
   const model = options.model ?? "gemini-3-flash-preview";
+  const generateContent: GeminiGenerateContent =
+    options.generateContent ??
+    ((request) =>
+      ai.models.generateContent(
+        request as Parameters<typeof ai.models.generateContent>[0],
+      ));
 
   return async (companyEnrichment: CompanyEnrichment): Promise<OutreachDraftContent> => {
     const { content, evidenceBasis } = companyEnrichment;
@@ -123,34 +132,12 @@ export function createGeminiDraftWriter(options: {
     const startTime = Date.now();
 
     try {
-      const userPrompt = OUTREACH_USER_PROMPT_TEMPLATE
-        .replace("{enrichment_json}", JSON.stringify(content, null, 2))
-        .replace("{evidence_json}", JSON.stringify(evidenceBasis, null, 2));
-
-      const response = await ai.models.generateContent({
+      const draft = await generateDraftWithRetry({
+        generateContent,
         model,
-        contents: userPrompt,
-        config: {
-          systemInstruction: OUTREACH_SYSTEM_PROMPT,
-          temperature: 0.35,
-          maxOutputTokens: 2048,
-          responseMimeType: "application/json",
-          responseSchema: OUTREACH_DRAFT_RESPONSE_SCHEMA,
-        },
+        content,
+        evidenceBasis,
       });
-
-      const elapsed = Date.now() - startTime;
-      const rawText = response.text?.trim() ?? "";
-
-      console.log(`[apex]   → [Gemini] Response received in ${elapsed}ms (${rawText.length} chars)`);
-
-      // Parse the JSON response — strip markdown fencing if present
-      const jsonText = rawText
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-
-      const draft = normalizeDraftContent(parseDraftJson(jsonText), content);
 
       console.log(`[apex]   ✓ [Gemini] Draft generated: "${draft.subject}"`);
 
@@ -170,6 +157,102 @@ export function createGeminiDraftWriter(options: {
       return buildTemplateDraft(content, evidenceReferences);
     }
   };
+}
+
+async function generateDraftWithRetry(options: {
+  generateContent: GeminiGenerateContent;
+  model: string;
+  content: CompanyEnrichment["content"];
+  evidenceBasis: EvidenceBasisItem[];
+}): Promise<{ subject: string; body: string }> {
+  const attempts = [
+    {
+      label: "primary",
+      contents: buildFullOutreachPrompt(options.content, options.evidenceBasis),
+      maxOutputTokens: 2048,
+    },
+    {
+      label: "compact retry",
+      contents: buildCompactOutreachPrompt(options.content, options.evidenceBasis),
+      maxOutputTokens: 1024,
+    },
+  ];
+
+  let lastError: unknown;
+
+  for (const [index, attempt] of attempts.entries()) {
+    const response = await options.generateContent({
+      model: options.model,
+      contents: attempt.contents,
+      config: {
+        systemInstruction: OUTREACH_SYSTEM_PROMPT,
+        temperature: 0.25,
+        maxOutputTokens: attempt.maxOutputTokens,
+        responseMimeType: "application/json",
+        responseSchema: OUTREACH_DRAFT_RESPONSE_SCHEMA,
+      },
+    });
+    const rawText = response.text?.trim() ?? "";
+    console.log(`[apex]   → [Gemini] ${attempt.label} response received (${rawText.length} chars)`);
+
+    try {
+      return normalizeDraftContent(
+        parseDraftJson(stripJsonFencing(rawText)),
+        options.content,
+      );
+    } catch (error) {
+      lastError = error;
+      const reason = error instanceof Error ? error.message : String(error);
+      if (index < attempts.length - 1) {
+        console.log(`[apex]   → [Gemini] ${attempt.label} returned invalid JSON: ${reason}; retrying with compact prompt`);
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gemini failed to return a valid outreach draft.");
+}
+
+function buildFullOutreachPrompt(
+  content: CompanyEnrichment["content"],
+  evidenceBasis: EvidenceBasisItem[],
+): string {
+  return OUTREACH_USER_PROMPT_TEMPLATE
+    .replace("{enrichment_json}", JSON.stringify(content, null, 2))
+    .replace("{evidence_json}", JSON.stringify(evidenceBasis, null, 2));
+}
+
+function buildCompactOutreachPrompt(
+  content: CompanyEnrichment["content"],
+  evidenceBasis: EvidenceBasisItem[],
+): string {
+  const evidenceSummary = evidenceBasis
+    .slice(0, 3)
+    .map(formatEvidenceReference)
+    .join("; ");
+  const narrativeAngle = selectNarrativeOutreachAngle(content);
+
+  return `Return ONLY valid JSON with keys "subject" and "body".
+Subject must be under 70 characters.
+Body must be 5 sentences max and use \\n for paragraph breaks.
+
+Company: ${content.company.name}
+Domain: ${content.company.domain}
+Funding: ${content.funding.stage}, ${content.funding.totalRaised}
+Main story: ${narrativeAngle}
+Compute signal: ${content.technicalSignals.computeIntensity}
+Key reasons: ${content.salesSignals.keyReasons.slice(0, 3).join("; ")}
+Evidence: ${evidenceSummary}
+
+Write the email on behalf of Parallel.`;
+}
+
+function stripJsonFencing(rawText: string): string {
+  return rawText
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 }
 
 function parseDraftJson(jsonText: string): { subject: string; body: string } {
