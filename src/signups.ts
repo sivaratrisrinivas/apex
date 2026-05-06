@@ -665,6 +665,53 @@ export class PrototypeStore {
     return rows.map(mapEnrichmentRunRow);
   }
 
+  failActiveEnrichmentRunsOlderThan(
+    cutoffIso: string,
+    failureReason: string,
+    finishedAt = new Date().toISOString(),
+  ): EnrichmentRun[] {
+    const rows = this.database
+      .query(
+        `
+          SELECT
+            sequence,
+            id,
+            developer_signup_id,
+            company_id,
+            normalized_company_domain,
+            status,
+            requested_at,
+            started_at,
+            finished_at,
+            failure_reason
+          FROM enrichment_runs
+          WHERE status IN ('pending', 'researching')
+            AND requested_at < ?
+          ORDER BY sequence ASC
+        `,
+      )
+      .all(cutoffIso) as EnrichmentRunRow[];
+
+    const failedRuns: EnrichmentRun[] = [];
+
+    for (const row of rows) {
+      const failedRun = this.finishEnrichmentRun(
+        row.id,
+        {
+          status: "failed",
+          failureReason,
+        },
+        finishedAt,
+      );
+
+      if (failedRun) {
+        failedRuns.push(failedRun);
+      }
+    }
+
+    return failedRuns;
+  }
+
   getEnrichmentRun(id: string): EnrichmentRun | null {
     const row = this.getEnrichmentRunRow(id);
 

@@ -4,6 +4,7 @@ import {
   createFakeParallelEnrichmentWorker,
   createParallelTaskClientFromEnv,
   type ParallelTaskClient,
+  type ParallelProcessor,
 } from "./enrichment";
 import { loadLocalEnvFile } from "./local-env";
 import { createGeminiDraftWriter, type OutreachDraftWriter } from "./gemini";
@@ -325,6 +326,8 @@ function isActiveEnrichmentStatus(status: EnrichmentRun["status"]): boolean {
 function resolveEnrichmentWorker(
   options: CreateAppOptions,
 ): EnrichmentWorker | undefined {
+  const env = options.env ?? process.env;
+
   if (options.enrichmentWorker) {
     return options.enrichmentWorker;
   }
@@ -332,10 +335,11 @@ function resolveEnrichmentWorker(
   if (options.parallelTaskClient) {
     return createEnrichmentWorker({
       taskClient: options.parallelTaskClient,
+      resultTimeoutSeconds:
+        parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
+        defaultParallelResultTimeoutSeconds(env),
     });
   }
-
-  const env = options.env ?? process.env;
 
   if (env.APEX_ENRICHMENT_MODE?.trim().toLowerCase() === "fake") {
     console.log(`[apex] Enrichment mode: FAKE (using hardcoded fixtures, no API calls)`);
@@ -350,7 +354,56 @@ function resolveEnrichmentWorker(
   console.log(`[apex] Enrichment mode: LIVE (using Parallel API key from env)`);
   return createEnrichmentWorker({
     taskClient: createParallelTaskClientFromEnv({ env }),
+    processor: parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
+    resultTimeoutSeconds:
+      parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
+      defaultParallelResultTimeoutSeconds(env),
   });
+}
+
+function defaultParallelResultTimeoutSeconds(
+  env: Record<string, string | undefined>,
+): number {
+  return env.VERCEL ? 270 : 600;
+}
+
+const PARALLEL_PROCESSORS: ParallelProcessor[] = [
+  "lite",
+  "base",
+  "core",
+  "core2x",
+  "pro",
+  "ultra",
+  "lite-fast",
+  "base-fast",
+  "core-fast",
+  "core2x-fast",
+  "pro-fast",
+  "ultra-fast",
+];
+
+function parseParallelProcessor(value: string | undefined): ParallelProcessor | undefined {
+  const processor = value?.trim();
+
+  if (PARALLEL_PROCESSORS.includes(processor as ParallelProcessor)) {
+    return processor as ParallelProcessor;
+  }
+
+  if (processor) {
+    console.log(`[apex] Ignoring unsupported APEX_PARALLEL_PROCESSOR: ${processor}`);
+  }
+
+  return undefined;
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  const parsed = Number(value);
+
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  return undefined;
 }
 
 function resolveOutreachDraftWriter(

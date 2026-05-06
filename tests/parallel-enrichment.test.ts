@@ -509,6 +509,71 @@ describe("Parallel Enrichment", () => {
     expect(html).toContain("High");
   });
 
+  test("uses a Vercel-safe Parallel result timeout for deployed enrichment", async () => {
+    const retrieveOptions: unknown[] = [];
+    const taskClient: ParallelTaskClient = {
+      createTaskRun: async () => ({
+        runId: "trun_modal",
+      }),
+      retrieveTaskRunResult: async (_runId, options) => {
+        retrieveOptions.push(options);
+
+        return {
+          output: {
+            type: "json",
+            content: {
+              company: {
+                name: "Modal Labs",
+                domain: "modal.com",
+                headquarters: "New York, NY",
+                employeeRange: "51-200 employees",
+              },
+              funding: {
+                stage: "Series B",
+                totalRaised: "$23M",
+                latestRound: "Series B",
+                latestRoundDate: "2025-04-15",
+              },
+              technicalSignals: {
+                aiWorkloads: "Runs cloud infrastructure for AI workloads.",
+                computeIntensity: "high",
+                developerToolRelevance: "Strong developer platform signal.",
+              },
+              salesSignals: {
+                keyReasons: ["AI infrastructure workload"],
+                suggestedNextAction: "Review infrastructure workload signal.",
+              },
+              confidence: {
+                evidenceConfidence: "High",
+                notes: "Technical signal is supported by citations.",
+              },
+              outreachSeed: {
+                personalizationAngles: ["AI infrastructure scaling"],
+                warnings: [],
+              },
+            },
+            basis: [],
+          },
+        };
+      },
+    };
+    const app = createApp({
+      env: {
+        VERCEL: "1",
+        PARALLEL_API_KEY: "parallel_secret",
+      },
+      parallelTaskClient: taskClient,
+    });
+
+    await postDemoSignup(app, {
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+    await waitForBackgroundWork();
+
+    expect(retrieveOptions).toEqual([{ timeoutSeconds: 270 }]);
+  });
+
   test("shows Parallel API errors as failed Enrichment Status reasons", async () => {
     const taskClient = createParallelTaskClientFromEnv({
       env: {

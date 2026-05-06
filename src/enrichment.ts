@@ -252,8 +252,12 @@ export const createCore2xEnrichmentWorker = createEnrichmentWorker;
 export function createEnrichmentWorker(options: {
   taskClient: ParallelTaskClient;
   processor?: ParallelProcessor;
+  resultTimeoutSeconds?: number;
 }): (enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion> {
   const processor = options.processor ?? "core2x-fast";
+  const resultTimeoutSeconds =
+    options.resultTimeoutSeconds ?? DEFAULT_RESULT_TOTAL_TIMEOUT_SECONDS;
+
   return async (enrichmentRun) => {
     console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
     const taskRun = await options.taskClient.createTaskRun({
@@ -268,9 +272,9 @@ export function createEnrichmentWorker(options: {
         domain: enrichmentRun.normalizedCompanyDomain,
       },
     });
-    console.log(`[apex]   → [Parallel] Task run created: ${taskRun.runId} — waiting for result (timeout: 600s)...`);
+    console.log(`[apex]   → [Parallel] Task run created: ${taskRun.runId} — waiting for result (timeout: ${resultTimeoutSeconds}s)...`);
     const result = await options.taskClient.retrieveTaskRunResult(taskRun.runId, {
-      timeoutSeconds: 600,
+      timeoutSeconds: resultTimeoutSeconds,
     });
     console.log(`[apex]   → [Parallel] Task run result received`);
     const parsedContent = parseCompanyEnrichmentContent(result.output.content);

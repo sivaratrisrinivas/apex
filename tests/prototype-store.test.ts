@@ -104,6 +104,37 @@ describe("Prototype Store", () => {
     expect(html).toContain("May 2, 2026");
   });
 
+  test("fails stale active Enrichment Runs so Vercel demos do not spin forever", () => {
+    const store = new PrototypeStore();
+
+    const result = store.createDeveloperSignup({
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+
+    if (!result.ok || !result.enrichmentRun) {
+      throw new Error("Expected a queued Enrichment Run.");
+    }
+
+    const failedRuns = store.failActiveEnrichmentRunsOlderThan(
+      "2026-05-01T10:10:00.000Z",
+      "Timed out on Vercel.",
+      "2026-05-01T10:11:00.000Z",
+    );
+
+    expect(failedRuns).toHaveLength(1);
+    expect(failedRuns[0]).toMatchObject({
+      id: result.enrichmentRun.id,
+      status: "failed",
+      failureReason: "Timed out on Vercel.",
+      finishedAt: "2026-05-01T10:11:00.000Z",
+    });
+    expect(store.listLeadQueue()[0]).toMatchObject({
+      normalizedCompanyDomain: "modal.com",
+      enrichmentStatus: "failed",
+    });
+  });
+
   test("exports and restores a full demo snapshot for Vercel Blob storage", () => {
     const sourceStore = new PrototypeStore();
 

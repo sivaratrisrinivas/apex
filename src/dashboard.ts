@@ -478,6 +478,7 @@ function formatDashboardScripts(statusPollingEnabled: boolean): string {
         var statusLabel = statusBanner.querySelector('[data-live-status-label]');
         var statusDetail = statusBanner.querySelector('[data-live-status-detail]');
         var statusAction = statusBanner.querySelector('[data-live-status-action]');
+        var reloadScheduled = false;
         if (statusAction) {
           statusAction.href = window.location.pathname + window.location.search;
         }
@@ -499,6 +500,12 @@ function formatDashboardScripts(statusPollingEnabled: boolean): string {
           if (statusLabel) statusLabel.textContent = 'Research complete';
           if (statusDetail) statusDetail.textContent = 'Latest enrichment is ready to review.';
           if (statusAction) statusAction.hidden = false;
+          if (!reloadScheduled) {
+            reloadScheduled = true;
+            window.setTimeout(function() {
+              window.location.replace(statusAction ? statusAction.href : window.location.href);
+            }, 900);
+          }
         };
 
         var pollStatus = function() {

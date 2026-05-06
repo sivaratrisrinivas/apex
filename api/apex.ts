@@ -4,6 +4,10 @@ import { createApp } from "../src/server";
 import { PrototypeStore } from "../src/signups";
 import { VercelBlobSnapshotStore } from "../src/vercel-blob-store";
 
+const DEFAULT_STALE_RUN_SECONDS = 330;
+const STALE_RUN_FAILURE_REASON =
+  "Enrichment timed out on Vercel before a result could be saved. Start a new enrichment run to retry.";
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const prototypeStore = new PrototypeStore();
@@ -14,6 +18,16 @@ export default {
 
     if (snapshot) {
       prototypeStore.restoreSnapshot(snapshot);
+    }
+
+    const staleRuns = prototypeStore.failActiveEnrichmentRunsOlderThan(
+      new Date(Date.now() - staleRunSeconds() * 1000).toISOString(),
+      STALE_RUN_FAILURE_REASON,
+    );
+
+    if (staleRuns.length > 0) {
+      console.log(`[apex] Marked ${staleRuns.length} stale Vercel enrichment run${staleRuns.length === 1 ? "" : "s"} as failed`);
+      await blobStore?.save(prototypeStore.createSnapshot());
     }
 
     const app = createApp({
@@ -48,4 +62,14 @@ function rewriteVercelRequest(request: Request): Request {
   url.searchParams.delete("apexPath");
 
   return new Request(url.toString(), request);
+}
+
+function staleRunSeconds(): number {
+  const configured = Number(process.env.APEX_STALE_RUN_TIMEOUT_SECONDS);
+
+  if (Number.isInteger(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_STALE_RUN_SECONDS;
 }
