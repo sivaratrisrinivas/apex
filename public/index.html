@@ -3,13 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="refresh" content="0; url=/api/apex?apexPath=" />
     <title>Apex</title>
     <script>
-      location.replace("/api/apex?apexPath=");
+      const params = new URLSearchParams(location.search);
+      params.set("apexPath", location.pathname.replace(/^\/+/, ""));
+      location.replace(`/api/apex?${params.toString()}`);
     </script>
   </head>
   <body>
     <p>Loading Apex...</p>
+    <noscript>
+      <p><a href="/api/apex?apexPath=">Open Apex</a></p>
+    </noscript>
   </body>
 </html>

@@ -259,7 +259,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           return new Response(null, {
             status: 303,
             headers: {
-              location: "/",
+              location: `/?view=queue&lead=${encodeURIComponent(result.enrichmentRun.normalizedCompanyDomain)}`,
             },
           });
         }

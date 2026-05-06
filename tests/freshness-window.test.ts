@@ -260,7 +260,9 @@ describe("Freshness Window", () => {
     const refreshResponse = await postManualRefresh(app, "modal.com");
 
     expect(refreshResponse.status).toBe(303);
-    expect(refreshResponse.headers.get("location")).toBe("/");
+    expect(refreshResponse.headers.get("location")).toBe(
+      "/?view=queue&lead=modal.com",
+    );
 
     await waitForBackgroundWork();
 
