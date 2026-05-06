@@ -35,6 +35,7 @@ export interface CreateAppOptions {
   recoverActiveRuns?: boolean;
   deferTask?: (task: () => Promise<void>) => void;
   onStoreChanged?: () => void | Promise<void>;
+  pollActiveRunsOnDashboardState?: boolean;
 }
 
 export function createApp(options: CreateAppOptions = {}): ApexApp {
@@ -123,6 +124,19 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       }
 
       if (url.pathname === "/dashboard-state" && request.method === "GET") {
+        if (options.pollActiveRunsOnDashboardState && configuredEnrichmentWorker) {
+          const activeRun = store.listRecoverableEnrichmentRuns()[0];
+
+          if (activeRun) {
+            await runEnrichmentRun(
+              store,
+              activeRun.id,
+              configuredEnrichmentWorker,
+            );
+            await notifyStoreChanged(options);
+          }
+        }
+
         const enrichmentRuns = store.listEnrichmentRuns();
         const latestRun = enrichmentRuns[0];
 
@@ -457,6 +471,11 @@ async function runEnrichmentRun(
     console.log(`[apex]   → Calling enrichment worker...`);
     const completion = await enrichmentWorker(startedRun);
     const elapsed = Date.now() - startTime;
+    if (completion.status === "deferred") {
+      console.log(`[apex]   ↳ Enrichment deferred after ${elapsed}ms: ${completion.reason}`);
+      return;
+    }
+
     console.log(`[apex]   ✓ Enrichment completed in ${elapsed}ms · status: ${completion.status}`);
     if (completion.status !== "failed" && completion.companyEnrichment) {
       const co = completion.companyEnrichment.content;

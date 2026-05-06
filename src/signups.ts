@@ -72,7 +72,8 @@ export interface CompanyEnrichmentResult {
 
 export type EnrichmentRunCompletion =
   | { status: "completed" | "partial"; companyEnrichment?: CompanyEnrichmentResult }
-  | { status: "failed"; failureReason: string };
+  | { status: "failed"; failureReason: string }
+  | { status: "deferred"; reason: string };
 
 export interface DemoSignupPayload {
   email: unknown;
@@ -108,6 +109,7 @@ export interface EnrichmentRun {
   startedAt?: string;
   finishedAt?: string;
   failureReason?: string;
+  parallelTaskRunId?: string;
 }
 
 export interface CompanyEnrichment {
@@ -272,6 +274,7 @@ interface EnrichmentRunRow {
   started_at: string | null;
   finished_at: string | null;
   failure_reason: string | null;
+  parallel_task_run_id: string | null;
 }
 
 interface CompanyEnrichmentRow {
@@ -354,6 +357,7 @@ const SNAPSHOT_TABLE_COLUMNS: Record<PrototypeStoreSnapshotTable, string[]> = {
     "started_at",
     "finished_at",
     "failure_reason",
+    "parallel_task_run_id",
   ],
   company_enrichments: [
     "sequence",
@@ -630,7 +634,8 @@ export class PrototypeStore {
             requested_at,
             started_at,
             finished_at,
-            failure_reason
+            failure_reason,
+            parallel_task_run_id
           FROM enrichment_runs
           ORDER BY sequence DESC
         `,
@@ -654,7 +659,8 @@ export class PrototypeStore {
             requested_at,
             started_at,
             finished_at,
-            failure_reason
+            failure_reason,
+            parallel_task_run_id
           FROM enrichment_runs
           WHERE status IN ('pending', 'researching')
           ORDER BY sequence ASC
@@ -683,7 +689,8 @@ export class PrototypeStore {
             requested_at,
             started_at,
             finished_at,
-            failure_reason
+            failure_reason,
+            parallel_task_run_id
           FROM enrichment_runs
           WHERE status IN ('pending', 'researching')
             AND requested_at < ?
@@ -716,6 +723,22 @@ export class PrototypeStore {
     const row = this.getEnrichmentRunRow(id);
 
     return row ? mapEnrichmentRunRow(row) : null;
+  }
+
+  setEnrichmentRunParallelTaskRunId(
+    id: string,
+    parallelTaskRunId: string,
+  ): EnrichmentRun | null {
+    this.database.run(
+      `
+        UPDATE enrichment_runs
+        SET parallel_task_run_id = ?
+        WHERE id = ?
+      `,
+      [parallelTaskRunId, id],
+    );
+
+    return this.getEnrichmentRun(id);
   }
 
   listCompanyEnrichments(): CompanyEnrichment[] {
@@ -910,6 +933,7 @@ export class PrototypeStore {
     if (
       finishedRun &&
       completion.status !== "failed" &&
+      completion.status !== "deferred" &&
       completion.companyEnrichment
     ) {
       this.insertCompanyEnrichment(
@@ -984,6 +1008,8 @@ export class PrototypeStore {
         FOREIGN KEY (company_id) REFERENCES companies(id)
       )
     `);
+
+    this.addColumnIfMissing("enrichment_runs", "parallel_task_run_id", "TEXT");
 
     this.database.run(`
       CREATE TABLE IF NOT EXISTS company_enrichments (
@@ -1174,7 +1200,8 @@ export class PrototypeStore {
             requested_at,
             started_at,
             finished_at,
-            failure_reason
+            failure_reason,
+            parallel_task_run_id
           FROM enrichment_runs
           WHERE company_id = ?
             AND status IN ('pending', 'researching')
@@ -1511,7 +1538,8 @@ export class PrototypeStore {
             requested_at,
             started_at,
             finished_at,
-            failure_reason
+            failure_reason,
+            parallel_task_run_id
           FROM enrichment_runs
           WHERE id = ?
         `,
@@ -1658,6 +1686,7 @@ function mapEnrichmentRunRow(row: EnrichmentRunRow): EnrichmentRun {
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     failureReason: row.failure_reason ?? undefined,
+    parallelTaskRunId: row.parallel_task_run_id ?? undefined,
   };
 }
 

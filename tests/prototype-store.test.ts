@@ -135,6 +135,30 @@ describe("Prototype Store", () => {
     });
   });
 
+  test("persists Parallel task run ids in snapshots", () => {
+    const sourceStore = new PrototypeStore();
+    const result = sourceStore.createDeveloperSignup({
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+
+    if (!result.ok || !result.enrichmentRun) {
+      throw new Error("Expected a queued Enrichment Run.");
+    }
+
+    sourceStore.setEnrichmentRunParallelTaskRunId(
+      result.enrichmentRun.id,
+      "trun_modal",
+    );
+
+    const restoredStore = new PrototypeStore();
+    restoredStore.restoreSnapshot(sourceStore.createSnapshot());
+
+    expect(restoredStore.getEnrichmentRun(result.enrichmentRun.id)).toMatchObject({
+      parallelTaskRunId: "trun_modal",
+    });
+  });
+
   test("exports and restores a full demo snapshot for Vercel Blob storage", () => {
     const sourceStore = new PrototypeStore();
 

@@ -243,7 +243,7 @@ describe("Parallel Enrichment", () => {
     const completion = await worker(enrichmentRunFor("modal.com"));
 
     expect(completion.status).toBe("partial");
-    if (completion.status === "failed" || !completion.companyEnrichment) {
+    if (completion.status !== "partial" || !completion.companyEnrichment) {
       throw new Error("Expected Partial Enrichment with Company Enrichment.");
     }
 

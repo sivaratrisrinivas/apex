@@ -1,10 +1,22 @@
 import { waitUntil } from "@vercel/functions";
 
+import {
+  createParallelEnrichmentTaskRun,
+  createParallelTaskClientFromEnv,
+  tryRetrieveParallelEnrichmentTaskCompletion,
+  type ParallelProcessor,
+  type ParallelTaskClient,
+} from "../src/enrichment";
 import { createApp } from "../src/server";
-import { PrototypeStore } from "../src/signups";
+import {
+  PrototypeStore,
+  type EnrichmentRun,
+  type EnrichmentRunCompletion,
+} from "../src/signups";
 import { VercelBlobSnapshotStore } from "../src/vercel-blob-store";
 
-const DEFAULT_STALE_RUN_SECONDS = 330;
+const DEFAULT_STALE_RUN_SECONDS = 1800;
+const DEFAULT_PARALLEL_POLL_SECONDS = 10;
 const STALE_RUN_FAILURE_REASON =
   "Enrichment timed out on Vercel before a result could be saved. Start a new enrichment run to retry.";
 
@@ -32,8 +44,10 @@ export default {
 
     const app = createApp({
       store: prototypeStore,
+      enrichmentWorker: createVercelEnrichmentWorker(prototypeStore, blobStore),
       env: process.env,
       recoverActiveRuns: false,
+      pollActiveRunsOnDashboardState: true,
       deferTask(task) {
         const deferred = task().catch((error) => {
           console.error("[apex] Deferred Vercel task failed:", error);
@@ -72,4 +86,108 @@ function staleRunSeconds(): number {
   }
 
   return DEFAULT_STALE_RUN_SECONDS;
+}
+
+function parallelPollSeconds(): number {
+  const configured = Number(process.env.APEX_PARALLEL_POLL_SECONDS);
+
+  if (Number.isInteger(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_PARALLEL_POLL_SECONDS;
+}
+
+function createVercelEnrichmentWorker(
+  store: PrototypeStore,
+  blobStore: VercelBlobSnapshotStore | null,
+):
+  | ((enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion>)
+  | undefined {
+  if (!process.env.PARALLEL_API_KEY?.trim()) {
+    return undefined;
+  }
+
+  const taskClient = createParallelTaskClientFromEnv({ env: process.env });
+  const processor = parseParallelProcessor(process.env.APEX_PARALLEL_PROCESSOR);
+
+  return async (enrichmentRun) => {
+    const taskRunId = await ensureParallelTaskRunId({
+      store,
+      blobStore,
+      taskClient,
+      enrichmentRun,
+      processor,
+    });
+    const pollSeconds = parallelPollSeconds();
+    const completion = await tryRetrieveParallelEnrichmentTaskCompletion({
+      taskClient,
+      taskRunId,
+      timeoutSeconds: pollSeconds,
+      requestTimeoutSeconds: pollSeconds,
+      retryDelayMilliseconds: 0,
+    });
+
+    if (!completion) {
+      return {
+        status: "deferred",
+        reason: `Parallel task ${taskRunId} is still running.`,
+      };
+    }
+
+    return completion;
+  };
+}
+
+async function ensureParallelTaskRunId(options: {
+  store: PrototypeStore;
+  blobStore: VercelBlobSnapshotStore | null;
+  taskClient: ParallelTaskClient;
+  enrichmentRun: EnrichmentRun;
+  processor?: ParallelProcessor;
+}): Promise<string> {
+  if (options.enrichmentRun.parallelTaskRunId) {
+    console.log(`[apex]   → [Parallel] Resuming task run ${options.enrichmentRun.parallelTaskRunId}`);
+    return options.enrichmentRun.parallelTaskRunId;
+  }
+
+  const taskRun = await createParallelEnrichmentTaskRun({
+    taskClient: options.taskClient,
+    enrichmentRun: options.enrichmentRun,
+    processor: options.processor,
+  });
+
+  options.store.setEnrichmentRunParallelTaskRunId(
+    options.enrichmentRun.id,
+    taskRun.runId,
+  );
+  await options.blobStore?.save(options.store.createSnapshot());
+  console.log(`[apex]   → [Parallel] Stored task run id ${taskRun.runId}`);
+
+  return taskRun.runId;
+}
+
+const PARALLEL_PROCESSORS: ParallelProcessor[] = [
+  "lite",
+  "base",
+  "core",
+  "core2x",
+  "pro",
+  "ultra",
+  "lite-fast",
+  "base-fast",
+  "core-fast",
+  "core2x-fast",
+  "pro-fast",
+  "ultra-fast",
+];
+
+function parseParallelProcessor(value: string | undefined): ParallelProcessor | undefined {
+  const processor = value?.trim();
+
+  if (PARALLEL_PROCESSORS.includes(processor as ParallelProcessor)) {
+    return processor as ParallelProcessor;
+  }
+
+  return undefined;
 }

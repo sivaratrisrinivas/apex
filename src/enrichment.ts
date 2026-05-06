@@ -259,23 +259,81 @@ export function createEnrichmentWorker(options: {
     options.resultTimeoutSeconds ?? DEFAULT_RESULT_TOTAL_TIMEOUT_SECONDS;
 
   return async (enrichmentRun) => {
-    console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
-    const taskRun = await options.taskClient.createTaskRun({
-      input: {
-        normalizedCompanyDomain: enrichmentRun.normalizedCompanyDomain,
-        companyWebsite: `https://${enrichmentRun.normalizedCompanyDomain}`,
-      },
+    const taskRun = await createParallelEnrichmentTaskRun({
+      taskClient: options.taskClient,
+      enrichmentRun,
       processor,
-      taskSpec: ENRICHMENT_TASK_SPEC,
-      metadata: {
-        apex_run: enrichmentRun.id,
-        domain: enrichmentRun.normalizedCompanyDomain,
-      },
     });
     console.log(`[apex]   → [Parallel] Task run created: ${taskRun.runId} — waiting for result (timeout: ${resultTimeoutSeconds}s)...`);
-    const result = await options.taskClient.retrieveTaskRunResult(taskRun.runId, {
+    return retrieveParallelEnrichmentTaskCompletion({
+      taskClient: options.taskClient,
+      taskRunId: taskRun.runId,
       timeoutSeconds: resultTimeoutSeconds,
     });
+  };
+}
+
+export async function createParallelEnrichmentTaskRun(options: {
+  taskClient: ParallelTaskClient;
+  enrichmentRun: EnrichmentRun;
+  processor?: ParallelProcessor;
+}): Promise<{ runId: string }> {
+  const processor = options.processor ?? "core2x-fast";
+  const enrichmentRun = options.enrichmentRun;
+
+  console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
+
+  return options.taskClient.createTaskRun({
+    input: {
+      normalizedCompanyDomain: enrichmentRun.normalizedCompanyDomain,
+      companyWebsite: `https://${enrichmentRun.normalizedCompanyDomain}`,
+    },
+    processor,
+    taskSpec: ENRICHMENT_TASK_SPEC,
+    metadata: {
+      apex_run: enrichmentRun.id,
+      domain: enrichmentRun.normalizedCompanyDomain,
+    },
+  });
+}
+
+export async function retrieveParallelEnrichmentTaskCompletion(options: {
+  taskClient: ParallelTaskClient;
+  taskRunId: string;
+  timeoutSeconds?: number;
+  requestTimeoutSeconds?: number;
+  retryDelayMilliseconds?: number;
+}): Promise<EnrichmentRunCompletion> {
+  const result = await options.taskClient.retrieveTaskRunResult(options.taskRunId, {
+    timeoutSeconds: options.timeoutSeconds,
+    requestTimeoutSeconds: options.requestTimeoutSeconds,
+    retryDelayMilliseconds: options.retryDelayMilliseconds,
+  });
+
+  return parseParallelEnrichmentTaskResult(result);
+}
+
+export async function tryRetrieveParallelEnrichmentTaskCompletion(options: {
+  taskClient: ParallelTaskClient;
+  taskRunId: string;
+  timeoutSeconds?: number;
+  requestTimeoutSeconds?: number;
+  retryDelayMilliseconds?: number;
+}): Promise<EnrichmentRunCompletion | null> {
+  try {
+    return await retrieveParallelEnrichmentTaskCompletion(options);
+  } catch (error) {
+    if (isParallelResultNotReadyError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+function parseParallelEnrichmentTaskResult(
+  result: ParallelTaskRunResult,
+): EnrichmentRunCompletion {
     console.log(`[apex]   → [Parallel] Task run result received`);
     const parsedContent = parseCompanyEnrichmentContent(result.output.content);
 
@@ -286,7 +344,12 @@ export function createEnrichmentWorker(options: {
         evidenceBasis: parseEvidenceBasis(result.output.basis),
       },
     };
-  };
+}
+
+export function isParallelResultNotReadyError(
+  error: unknown,
+): error is ParallelResultNotReadyError {
+  return error instanceof ParallelResultNotReadyError;
 }
 
 export function createFakeParallelEnrichmentWorker(): (
@@ -539,7 +602,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
       ? `: ${lastNotReadyError.message}`
       : ".";
 
-    throw new Error(
+    throw new ParallelResultNotReadyError(
       `Parallel Task API retrieve task run result timed out after ${totalTimeoutSeconds}s${detail}`,
     );
   }
@@ -642,7 +705,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
   }
 }
 
-class ParallelResultNotReadyError extends Error {
+export class ParallelResultNotReadyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ParallelResultNotReadyError";
