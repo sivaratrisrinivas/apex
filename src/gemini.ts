@@ -99,7 +99,6 @@ export function createGeminiDraftWriter(options: {
       confidence.includes("low") ||
       confidence.includes("unknown")
     ) {
-      console.log(`[apex]   → [Gemini] Skipping LLM — weak evidence (${confidence}), using template fallback`);
       return {
         status: "needs-evidence",
         subject: `Follow up with ${content.company.domain}`,
@@ -115,9 +114,6 @@ export function createGeminiDraftWriter(options: {
       };
     }
 
-    console.log(`[apex]   → [Gemini] Generating outreach draft with ${model}...`);
-    const startTime = Date.now();
-
     try {
       const body = await generateBodyWithRetry({
         generateContent,
@@ -127,21 +123,13 @@ export function createGeminiDraftWriter(options: {
       });
       const subject = buildSubject(content);
 
-      console.log(`[apex]   ✓ [Gemini] Draft generated: "${subject}"`);
-
       return {
         status: "ready",
         subject,
         body,
         evidenceReferences,
       };
-    } catch (error) {
-      const elapsed = Date.now() - startTime;
-      const reason = error instanceof Error ? error.message : String(error);
-      console.log(`[apex]   ✗ [Gemini] Failed after ${elapsed}ms: ${reason}`);
-      console.log(`[apex]   → [Gemini] Falling back to template draft`);
-
-      // Fall back to template
+    } catch {
       return buildTemplateDraft(content, evidenceReferences);
     }
   };
@@ -155,12 +143,10 @@ async function generateBodyWithRetry(options: {
 }): Promise<string> {
   const attempts = [
     {
-      label: "primary",
       contents: buildFullBodyPrompt(options.content, options.evidenceBasis),
       maxOutputTokens: 2048,
     },
     {
-      label: "compact retry",
       contents: buildCompactBodyPrompt(options.content, options.evidenceBasis),
       maxOutputTokens: 1024,
     },
@@ -168,7 +154,7 @@ async function generateBodyWithRetry(options: {
 
   let lastError: unknown;
 
-  for (const [index, attempt] of attempts.entries()) {
+  for (const attempt of attempts) {
     const response = await options.generateContent({
       model: options.model,
       contents: attempt.contents,
@@ -180,16 +166,11 @@ async function generateBodyWithRetry(options: {
       },
     });
     const rawText = response.text?.trim() ?? "";
-    console.log(`[apex]   → [Gemini] ${attempt.label} response received (${rawText.length} chars)`);
 
     try {
       return normalizeGeneratedBody(rawText);
     } catch (error) {
       lastError = error;
-      const reason = error instanceof Error ? error.message : String(error);
-      if (index < attempts.length - 1) {
-        console.log(`[apex]   → [Gemini] ${attempt.label} returned unusable body: ${reason}; retrying with compact prompt`);
-      }
     }
   }
 

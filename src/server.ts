@@ -46,14 +46,9 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
   const configuredEnrichmentWorker = resolveEnrichmentWorker(options);
   const draftWriter = resolveOutreachDraftWriter(options);
   const recoverActiveRuns = options.recoverActiveRuns ?? true;
-  console.log(`[apex] App created · enrichment worker: ${configuredEnrichmentWorker ? "configured" : "none (enrichment will be skipped)"}`);
 
   if (configuredEnrichmentWorker && recoverActiveRuns) {
     const recoverableRuns = store.listRecoverableEnrichmentRuns();
-
-    if (recoverableRuns.length > 0) {
-      console.log(`[apex] Recovering ${recoverableRuns.length} active Enrichment Run${recoverableRuns.length === 1 ? "" : "s"}`);
-    }
 
     for (const enrichmentRun of recoverableRuns) {
       scheduleDeferredTask(options, async () => {
@@ -137,26 +132,17 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       }
 
       if (url.pathname === "/demo-signups" && request.method === "POST") {
-        console.log(`[apex] ← POST /demo-signups`);
         const isFormPost = isUrlEncodedFormPost(request);
         const result = store.createDeveloperSignup(
           await readStructuredPayload(request),
         );
 
         if (!result.ok) {
-          console.log(`[apex]   ✗ Signup rejected: ${JSON.stringify(result.body)}`);
           return jsonResponse(result.body, result.status);
-        }
-
-        const signup = result.developerSignup;
-        console.log(`[apex]   ✓ Signup created: ${signup.email} → ${signup.normalizedCompanyDomain} (${signup.qualification})`);
-        if (signup.qualification !== "qualified") {
-          console.log(`[apex]   ↳ Unqualified reason: ${signup.unqualifiedReason}`);
         }
 
         if (result.enrichmentRun) {
           const enrichmentRunId = result.enrichmentRun.id;
-          console.log(`[apex]   ↳ Enrichment run queued: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
           scheduleDeferredTask(options, async () => {
             await runEnrichmentRun(
@@ -165,8 +151,6 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
               configuredEnrichmentWorker,
             );
           });
-        } else {
-          console.log(`[apex]   ↳ No enrichment run needed (fresh enrichment, active run, or unqualified signup)`);
         }
 
         if (isFormPost) {
@@ -190,20 +174,13 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       }
 
       if (url.pathname === "/outreach-drafts" && request.method === "POST") {
-        console.log(`[apex] ← POST /outreach-drafts`);
         const isFormPost = isUrlEncodedFormPost(request);
         const payload = await readStructuredPayload(request);
         const result = await store.generateOutreachDraft(payload, { draftWriter });
 
         if (!result.ok) {
-          console.log(`[apex]   ✗ Draft rejected: ${JSON.stringify(result.body)}`);
           return jsonResponse(result.body, result.status);
         }
-
-        const draft = result.outreachDraft;
-        console.log(`[apex]   ✓ Outreach draft ${result.reusedExisting ? "reused" : "generated"}: ${draft.companyName} (${draft.status})`);
-        console.log(`[apex]   ↳ Subject: ${draft.subject}`);
-        console.log(`[apex]   ↳ Evidence refs: ${draft.evidenceReferences.length}`);
 
         if (isFormPost) {
           return new Response(null, {
@@ -224,19 +201,16 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       }
 
       if (url.pathname === "/manual-refreshes" && request.method === "POST") {
-        console.log(`[apex] ← POST /manual-refreshes`);
         const isFormPost = isUrlEncodedFormPost(request);
         const result = store.requestManualRefresh(
           await readStructuredPayload(request),
         );
 
         if (!result.ok) {
-          console.log(`[apex]   ✗ Manual refresh rejected: ${JSON.stringify(result.body)}`);
           return jsonResponse(result.body, result.status);
         }
 
         const enrichmentRunId = result.enrichmentRun.id;
-        console.log(`[apex]   ✓ Manual refresh: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
         scheduleDeferredTask(options, async () => {
           await runEnrichmentRun(
@@ -328,16 +302,13 @@ function resolveEnrichmentWorker(
   }
 
   if (env.APEX_ENRICHMENT_MODE?.trim().toLowerCase() === "fake") {
-    console.log(`[apex] Enrichment mode: FAKE (using hardcoded fixtures, no API calls)`);
     return createFakeParallelEnrichmentWorker();
   }
 
   if (!env.PARALLEL_API_KEY?.trim()) {
-    console.log(`[apex] Enrichment mode: NONE (no PARALLEL_API_KEY found — enrichment will be skipped)`);
     return undefined;
   }
 
-  console.log(`[apex] Enrichment mode: LIVE (using Parallel API key from env)`);
   return createEnrichmentWorker({
     taskClient: createParallelTaskClientFromEnv({ env }),
     processor: parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
@@ -369,10 +340,6 @@ function parseParallelProcessor(value: string | undefined): ParallelProcessor | 
     return processor as ParallelProcessor;
   }
 
-  if (processor) {
-    console.log(`[apex] Ignoring unsupported APEX_PARALLEL_PROCESSOR: ${processor}`);
-  }
-
   return undefined;
 }
 
@@ -400,11 +367,9 @@ function resolveOutreachDraftWriter(
   const env = options.env ?? process.env;
 
   if (env.GEMINI_API_KEY?.trim()) {
-    console.log(`[apex] Draft mode: GEMINI (using GEMINI_API_KEY from env)`);
     return createGeminiDraftWriter({ apiKey: env.GEMINI_API_KEY.trim() });
   }
 
-  console.log(`[apex] Draft mode: TEMPLATE (no GEMINI_API_KEY found)`);
   return undefined;
 }
 
@@ -413,50 +378,24 @@ async function runEnrichmentRun(
   enrichmentRunId: string,
   enrichmentWorker: EnrichmentWorker | undefined,
 ): Promise<void> {
-  console.log(`[apex] ⚙ Enrichment run starting: ${enrichmentRunId}`);
-
   const startedRun = store.markEnrichmentRunResearching(
     enrichmentRunId,
     new Date().toISOString(),
   );
 
   if (!startedRun) {
-    console.log(`[apex]   ✗ Enrichment run ${enrichmentRunId} not found in store`);
     return;
   }
-
-  console.log(`[apex]   → Status: researching · domain: ${startedRun.normalizedCompanyDomain}`);
 
   if (!enrichmentWorker) {
-    console.log(`[apex]   ⏸ No enrichment worker configured — run stays in researching state`);
     return;
   }
 
-  const startTime = Date.now();
   try {
-    console.log(`[apex]   → Calling enrichment worker...`);
     const completion = await enrichmentWorker(startedRun);
-    const elapsed = Date.now() - startTime;
-
-    console.log(`[apex]   ✓ Enrichment completed in ${elapsed}ms · status: ${completion.status}`);
-    if (completion.status !== "failed" && completion.companyEnrichment) {
-      const co = completion.companyEnrichment.content;
-      console.log(`[apex]   ↳ Company: ${co.company.name} · HQ: ${co.company.headquarters} · Employees: ${co.company.employeeRange}`);
-      console.log(`[apex]   ↳ Funding: ${co.funding.stage} · Total raised: ${co.funding.totalRaised}`);
-      console.log(`[apex]   ↳ Compute intensity: ${co.technicalSignals.computeIntensity} · Confidence: ${co.confidence.evidenceConfidence}`);
-      console.log(`[apex]   ↳ Evidence basis items: ${completion.companyEnrichment.evidenceBasis.length}`);
-      console.log(`[apex]   ↳ Key reasons: ${co.salesSignals.keyReasons.join(", ")}`);
-      console.log(`[apex]   ↳ Suggested next action: ${co.salesSignals.suggestedNextAction}`);
-    }
-    if (completion.status === "failed" && "failureReason" in completion) {
-      console.log(`[apex]   ↳ Failure reason: ${completion.failureReason}`);
-    }
     store.finishEnrichmentRun(enrichmentRunId, completion, new Date().toISOString());
-    console.log(`[apex]   ✓ Enrichment run ${enrichmentRunId} persisted to store`);
   } catch (error) {
-    const elapsed = Date.now() - startTime;
     const reason = formatErrorMessage(error);
-    console.log(`[apex]   ✗ Enrichment failed after ${elapsed}ms: ${reason}`);
     store.finishEnrichmentRun(
       enrichmentRunId,
       {
@@ -508,11 +447,7 @@ function formatErrorMessage(error: unknown): string {
 }
 
 if (import.meta.main) {
-  console.log(`[apex] ────────────────────────────────────`);
-  console.log(`[apex] Starting Apex server...`);
   const env = loadLocalEnvFile();
-  console.log(`[apex] .env.local: ${env.PARALLEL_API_KEY ? "PARALLEL_API_KEY loaded ✓" : "no PARALLEL_API_KEY found"}`);
-  console.log(`[apex] APEX_ENRICHMENT_MODE: ${env.APEX_ENRICHMENT_MODE ?? "(not set)"}`);
   const port = Number(env.PORT ?? 3000);
   const app = createApp({
     prototypeStorePath: env.APEX_PROTOTYPE_STORE_PATH ?? ".apex/prototype.sqlite",
@@ -524,8 +459,4 @@ if (import.meta.main) {
     hostname: "0.0.0.0",
     fetch: app.fetch,
   });
-
-  console.log(`[apex] ────────────────────────────────────`);
-  console.log(`[apex] Apex running at http://localhost:${port}`);
-  console.log(`[apex] ────────────────────────────────────`);
 }

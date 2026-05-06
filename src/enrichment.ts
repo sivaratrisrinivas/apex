@@ -264,7 +264,6 @@ export function createEnrichmentWorker(options: {
       enrichmentRun,
       processor,
     });
-    console.log(`[apex]   → [Parallel] Task run created: ${taskRun.runId} — waiting for result (timeout: ${resultTimeoutSeconds}s)...`);
     return retrieveParallelEnrichmentTaskCompletion({
       taskClient: options.taskClient,
       taskRunId: taskRun.runId,
@@ -280,8 +279,6 @@ async function createParallelEnrichmentTaskRun(options: {
 }): Promise<{ runId: string }> {
   const processor = options.processor ?? "core2x-fast";
   const enrichmentRun = options.enrichmentRun;
-
-  console.log(`[apex]   → [Parallel] Creating task run for ${enrichmentRun.normalizedCompanyDomain} (processor: ${processor})`);
 
   return options.taskClient.createTaskRun({
     input: {
@@ -316,7 +313,6 @@ async function retrieveParallelEnrichmentTaskCompletion(options: {
 function parseParallelEnrichmentTaskResult(
   result: ParallelTaskRunResult,
 ): EnrichmentRunCompletion {
-    console.log(`[apex]   → [Parallel] Task run result received`);
     const parsedContent = parseCompanyEnrichmentContent(result.output.content);
 
     return {
@@ -332,20 +328,17 @@ export function createFakeParallelEnrichmentWorker(): (
   enrichmentRun: EnrichmentRun,
 ) => Promise<EnrichmentRunCompletion> {
   return async (enrichmentRun) => {
-    console.log(`[apex]   → [Fake] Looking up fixture for: ${enrichmentRun.normalizedCompanyDomain}`);
     const fixture = FAKE_PARALLEL_ENRICHMENT_FIXTURES[
       enrichmentRun.normalizedCompanyDomain
     ];
 
     if (!fixture) {
-      console.log(`[apex]   → [Fake] No fixture found — returning failure`);
       return {
         status: "failed",
         failureReason: `No fake Parallel enrichment fixture exists for ${enrichmentRun.normalizedCompanyDomain}.`,
       };
     }
 
-    console.log(`[apex]   → [Fake] Fixture found — returning ${fixture.status} enrichment`);
     return structuredClone(fixture);
   };
 }
@@ -487,7 +480,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
   }
 
   async createTaskRun(request: ParallelTaskRunRequest): Promise<{ runId: string }> {
-    console.log(`[apex]   → [Parallel API] POST /v1/tasks/runs for ${request.input.normalizedCompanyDomain}`);
     const response = await this.fetch(`${this.baseUrl}/v1/tasks/runs`, {
       method: "POST",
       headers: this.headers(),
@@ -501,13 +493,11 @@ class HttpParallelTaskClient implements ParallelTaskClient {
     const body = await readJsonResponse(response);
 
     if (!response.ok) {
-      console.log(`[apex]   → [Parallel API] Create task run failed: HTTP ${response.status}`);
       throw parallelApiError("create task run", response, body);
     }
 
     const taskRun = expectRecord(body, "Parallel task run response");
     const runId = expectString(taskRun.run_id, "Parallel task run response.run_id");
-    console.log(`[apex]   → [Parallel API] Task run created: ${runId}`);
 
     return { runId };
   }
@@ -550,8 +540,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         return await this.retrieveTaskRunResultOnce(
           runId,
           timeoutForAttemptSeconds,
-          attempt,
-          totalTimeoutSeconds,
         );
       } catch (error) {
         if (!(error instanceof ParallelResultNotReadyError)) {
@@ -563,10 +551,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         if (Date.now() >= deadline) {
           break;
         }
-
-        console.log(
-          `[apex]   → [Parallel API] Result not ready yet; retrying (attempt ${attempt})`,
-        );
 
         await delay(
           Math.min(retryDelayMilliseconds, Math.max(0, deadline - Date.now())),
@@ -586,17 +570,12 @@ class HttpParallelTaskClient implements ParallelTaskClient {
   private async retrieveTaskRunResultOnce(
     runId: string,
     timeoutSeconds: number,
-    attempt: number,
-    totalTimeoutSeconds: number,
   ): Promise<ParallelTaskRunResult> {
     const url = new URL(
       `${this.baseUrl}/v1/tasks/runs/${encodeURIComponent(runId)}/result`,
     );
     url.searchParams.set("timeout", String(timeoutSeconds));
 
-    console.log(
-      `[apex]   → [Parallel API] GET /v1/tasks/runs/${runId}/result (attempt ${attempt}, request timeout: ${timeoutSeconds}s, budget: ${totalTimeoutSeconds}s)`,
-    );
     let response: Response;
 
     try {
@@ -631,9 +610,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         );
       }
 
-      console.log(
-        `[apex]   → [Parallel API] Retrieve result failed: HTTP ${response.status}`,
-      );
       throw parallelApiError("retrieve task run result", response, body);
     }
 
@@ -644,7 +620,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         : expectRecord(result.run, "Parallel task run result.run");
 
     if (run?.status === "failed") {
-      console.log(`[apex]   → [Parallel API] Task run failed on server side`);
       throw new Error(
         `Parallel Task API task run failed: ${extractParallelErrorMessage(run.error)}`,
       );
@@ -655,8 +630,6 @@ class HttpParallelTaskClient implements ParallelTaskClient {
         `Parallel task run is still ${String(run?.status)}.`,
       );
     }
-
-    console.log(`[apex]   → [Parallel API] Result received successfully`);
 
     const output = expectRecord(result.output, "Parallel task run result.output");
 
