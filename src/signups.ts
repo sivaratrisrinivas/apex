@@ -19,6 +19,7 @@ export type EnrichmentStatus =
   | "partial"
   | "unqualified"
   | "failed";
+export type EnrichmentDepth = "quick" | "deep";
 
 export interface EnrichmentCitation {
   title: string;
@@ -103,6 +104,7 @@ export interface EnrichmentRun {
   developerSignupId: string;
   companyId: string;
   normalizedCompanyDomain: string;
+  enrichmentDepth: EnrichmentDepth;
   status: EnrichmentStatus;
   requestedAt: string;
   startedAt?: string;
@@ -267,6 +269,7 @@ interface EnrichmentRunRow {
   developer_signup_id: string;
   company_id: string;
   normalized_company_domain: string;
+  enrichment_depth: EnrichmentDepth;
   status: EnrichmentStatus;
   requested_at: string;
   started_at: string | null;
@@ -349,6 +352,7 @@ const SNAPSHOT_TABLE_COLUMNS: Record<PrototypeStoreSnapshotTable, string[]> = {
     "developer_signup_id",
     "company_id",
     "normalized_company_domain",
+    "enrichment_depth",
     "status",
     "requested_at",
     "started_at",
@@ -626,6 +630,7 @@ export class PrototypeStore {
             developer_signup_id,
             company_id,
             normalized_company_domain,
+            enrichment_depth,
             status,
             requested_at,
             started_at,
@@ -650,6 +655,7 @@ export class PrototypeStore {
             developer_signup_id,
             company_id,
             normalized_company_domain,
+            enrichment_depth,
             status,
             requested_at,
             started_at,
@@ -758,6 +764,46 @@ export class PrototypeStore {
       ok: true,
       enrichmentRun,
     };
+  }
+
+  requestDeepEnrichmentRun(
+    companyId: string,
+    requestedAt = new Date().toISOString(),
+  ): EnrichmentRun | null {
+    const company = this.database
+      .query(
+        `
+          SELECT id, normalized_company_domain, created_at
+          FROM companies
+          WHERE id = ?
+        `,
+      )
+      .get(companyId) as CompanyRow | null;
+
+    if (!company || this.findActiveEnrichmentRunForCompany(companyId)) {
+      return null;
+    }
+
+    const latestDeveloperSignup = this.findLatestDeveloperSignupForCompany(
+      company.normalized_company_domain,
+    );
+
+    if (!latestDeveloperSignup) {
+      return null;
+    }
+
+    const enrichmentRun = this.createEnrichmentRun(
+      {
+        ...latestDeveloperSignup,
+        signedUpAt: requestedAt,
+      },
+      mapCompanyRow(company),
+      "deep",
+    );
+
+    this.updateLeadEnrichmentStatus(companyId, enrichmentRun.status);
+
+    return enrichmentRun;
   }
 
   async generateOutreachDraft(
@@ -928,6 +974,7 @@ export class PrototypeStore {
         developer_signup_id TEXT NOT NULL,
         company_id TEXT NOT NULL,
         normalized_company_domain TEXT NOT NULL,
+        enrichment_depth TEXT NOT NULL DEFAULT 'deep',
         status TEXT NOT NULL,
         requested_at TEXT NOT NULL,
         started_at TEXT,
@@ -937,6 +984,11 @@ export class PrototypeStore {
         FOREIGN KEY (company_id) REFERENCES companies(id)
       )
     `);
+    this.addColumnIfMissing(
+      "enrichment_runs",
+      "enrichment_depth",
+      "TEXT NOT NULL DEFAULT 'deep'",
+    );
 
     this.database.run(`
       CREATE TABLE IF NOT EXISTS company_enrichments (
@@ -1123,6 +1175,7 @@ export class PrototypeStore {
             developer_signup_id,
             company_id,
             normalized_company_domain,
+            enrichment_depth,
             status,
             requested_at,
             started_at,
@@ -1143,6 +1196,7 @@ export class PrototypeStore {
   private createEnrichmentRun(
     developerSignup: DeveloperSignup,
     company: Company,
+    enrichmentDepth: EnrichmentDepth = "quick",
   ): EnrichmentRun {
     const result = this.database.run(
       `
@@ -1150,15 +1204,17 @@ export class PrototypeStore {
           developer_signup_id,
           company_id,
           normalized_company_domain,
+          enrichment_depth,
           status,
           requested_at
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
       [
         developerSignup.id,
         company.id,
         company.normalizedCompanyDomain,
+        enrichmentDepth,
         "pending",
         developerSignup.signedUpAt,
       ],
@@ -1175,6 +1231,7 @@ export class PrototypeStore {
       developerSignupId: developerSignup.id,
       companyId: company.id,
       normalizedCompanyDomain: company.normalizedCompanyDomain,
+      enrichmentDepth,
       status: "pending",
       requestedAt: developerSignup.signedUpAt,
     };
@@ -1460,6 +1517,7 @@ export class PrototypeStore {
             developer_signup_id,
             company_id,
             normalized_company_domain,
+            enrichment_depth,
             status,
             requested_at,
             started_at,
@@ -1606,6 +1664,7 @@ function mapEnrichmentRunRow(row: EnrichmentRunRow): EnrichmentRun {
     developerSignupId: row.developer_signup_id,
     companyId: row.company_id,
     normalizedCompanyDomain: row.normalized_company_domain,
+    enrichmentDepth: row.enrichment_depth ?? "deep",
     status: row.status,
     requestedAt: row.requested_at,
     startedAt: row.started_at ?? undefined,

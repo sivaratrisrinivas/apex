@@ -14,6 +14,7 @@ interface DashboardOptions {
   leadQueueSort?: LeadQueueSort;
   activeView?: DashboardView;
   liveRefreshEnabled?: boolean;
+  latestCompanyEnrichmentId?: string | null;
 }
 
 type DashboardView = "intake" | "queue" | "lead" | "draft" | "activity";
@@ -106,7 +107,13 @@ export function renderDashboard(options: DashboardOptions = {}): string {
       </section>
     </main>
 
-    ${formatDashboardScripts(liveRefreshEnabled)}
+    <script type="application/json" id="apex-dashboard-cache">${serializeDashboardCachePayload({
+      leadQueue,
+      selectedLeadDomain: selectedLead?.normalizedCompanyDomain ?? null,
+      activeView,
+      leadQueueSort,
+    })}</script>
+    ${formatDashboardScripts(liveRefreshEnabled, options.latestCompanyEnrichmentId ?? null)}
   </body>
 </html>`;
 }
@@ -456,6 +463,36 @@ function formatEmpty(msg: string): string {
   return `<div class="panel"><div class="empty"><p>${esc(msg)}</p></div></div>`;
 }
 
+function serializeDashboardCachePayload(options: {
+  leadQueue: LeadQueueRecord[];
+  selectedLeadDomain: string | null;
+  activeView: DashboardView;
+  leadQueueSort: LeadQueueSort;
+}): string {
+  return JSON.stringify({
+    cachedAt: new Date().toISOString(),
+    selectedLeadDomain: options.selectedLeadDomain,
+    activeView: options.activeView,
+    leadQueueSort: options.leadQueueSort,
+    leads: options.leadQueue.map((lead) => ({
+      companyName: lead.companyName,
+      normalizedCompanyDomain: lead.normalizedCompanyDomain,
+      enrichmentStatus: lead.enrichmentStatus,
+      leadScore: lead.leadScore,
+      signupCount: lead.signupCount,
+      latestSignupAt: lead.latestSignupAt,
+      suggestedNextAction: lead.suggestedNextAction,
+      keyReasons: lead.keyReasons,
+      draft: lead.outreachDraft
+        ? {
+            subject: lead.outreachDraft.subject,
+            body: lead.outreachDraft.body,
+          }
+        : null,
+    })),
+  }).replaceAll("<", "\\u003c");
+}
+
 function formatLiveStatus(enabled: boolean): string {
   if (!enabled) return "";
 
@@ -470,9 +507,16 @@ function formatLiveStatus(enabled: boolean): string {
     </div>`;
 }
 
-function formatDashboardScripts(statusPollingEnabled: boolean): string {
+function formatDashboardScripts(
+  statusPollingEnabled: boolean,
+  latestCompanyEnrichmentId: string | null,
+): string {
+  const escapedLatestCompanyEnrichmentId = JSON.stringify(
+    latestCompanyEnrichmentId,
+  );
   const statusPollingScript = statusPollingEnabled
     ? `
+      var initialCompanyEnrichmentId = ${escapedLatestCompanyEnrichmentId};
       var statusBanner = document.querySelector('[data-live-status]');
       if (statusBanner) {
         var statusLabel = statusBanner.querySelector('[data-live-status-label]');
@@ -485,6 +529,21 @@ function formatDashboardScripts(statusPollingEnabled: boolean): string {
 
         var updateStatus = function(state) {
           var activeCount = Number(state.activeEnrichmentRunCount || 0);
+          var latestCompanyEnrichmentId = state.latestCompanyEnrichmentId || null;
+          if (latestCompanyEnrichmentId && latestCompanyEnrichmentId !== initialCompanyEnrichmentId) {
+            statusBanner.dataset.state = 'complete';
+            if (statusLabel) statusLabel.textContent = activeCount > 0 ? 'Quick result ready' : 'Research complete';
+            if (statusDetail) statusDetail.textContent = activeCount > 0 ? 'A first pass is ready while deeper research continues.' : 'Latest enrichment is ready to review.';
+            if (statusAction) statusAction.hidden = false;
+            if (!reloadScheduled) {
+              reloadScheduled = true;
+              window.setTimeout(function() {
+                window.location.replace(statusAction ? statusAction.href : window.location.href);
+              }, 900);
+            }
+            return;
+          }
+
           if (activeCount > 0) {
             if (statusLabel) {
               statusLabel.textContent = activeCount === 1 ? 'Research running' : activeCount + ' research runs active';
@@ -532,6 +591,45 @@ function formatDashboardScripts(statusPollingEnabled: boolean): string {
 
   return `
     <script${statusPollingEnabled ? " data-apex-status-poll" : ""}>
+      (function() {
+        var cacheKey = 'apex.dashboard.cache.v1';
+        var payloadEl = document.getElementById('apex-dashboard-cache');
+        var payload = null;
+        try {
+          if (payloadEl && payloadEl.textContent) {
+            payload = JSON.parse(payloadEl.textContent);
+            if (payload && Array.isArray(payload.leads) && payload.leads.length > 0) {
+              window.localStorage.setItem(cacheKey, JSON.stringify(payload));
+            }
+          }
+
+          if (payload && Array.isArray(payload.leads) && payload.leads.length > 0) {
+            return;
+          }
+
+          var cached = JSON.parse(window.localStorage.getItem(cacheKey) || 'null');
+          if (!cached || !Array.isArray(cached.leads) || cached.leads.length === 0) {
+            return;
+          }
+
+          var queue = document.querySelector('#moment-queue .lead-cards');
+          if (!queue) return;
+          var cachedPanel = document.createElement('div');
+          cachedPanel.className = 'panel cached-leads';
+          var title = document.createElement('h3');
+          title.textContent = 'Cached demo results';
+          cachedPanel.appendChild(title);
+          cached.leads.slice(0, 4).forEach(function(lead) {
+            var row = document.createElement('div');
+            row.className = 'cached-lead-row';
+            var score = lead.leadScore === null || lead.leadScore === undefined ? '--' : String(lead.leadScore);
+            row.textContent = lead.companyName + ' · ' + lead.normalizedCompanyDomain + ' · score ' + score;
+            cachedPanel.appendChild(row);
+          });
+          queue.appendChild(cachedPanel);
+        } catch (_) {}
+      })();
+
       document.addEventListener('click', function(e) {
         var btn = e.target.closest('[data-copy-outreach]');
         if (!btn) return;

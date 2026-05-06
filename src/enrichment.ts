@@ -226,6 +226,114 @@ export const ENRICHMENT_TASK_SPEC: ParallelTaskSpec = {
   },
 };
 
+export const QUICK_ENRICHMENT_TASK_SPEC: ParallelTaskSpec = {
+  input_schema: ENRICHMENT_TASK_SPEC.input_schema,
+  output_schema: {
+    type: "json",
+    json_schema: {
+      type: "object",
+      properties: {
+        company: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "The company's commonly used brand name.",
+            },
+            domain: {
+              type: "string",
+              description: "The normalized company domain confirmed during research.",
+            },
+            employeeRange: {
+              type: "string",
+              description: "The best-supported employee range, or Unknown.",
+            },
+          },
+          required: ["name", "domain"],
+          additionalProperties: false,
+        },
+        funding: {
+          type: "object",
+          properties: {
+            stage: {
+              type: "string",
+              description: "The latest known funding or maturity stage, or Unknown.",
+            },
+            totalRaised: {
+              type: "string",
+              description: "The best-supported total capital raised, or Unknown.",
+            },
+          },
+          additionalProperties: false,
+        },
+        technicalSignals: {
+          type: "object",
+          properties: {
+            computeIntensity: {
+              type: "string",
+              description: "Low, Medium, High, or Unknown estimate of infrastructure intensity.",
+            },
+            developerToolRelevance: {
+              type: "string",
+              description: "Why the company is or is not relevant for developer-tool sales.",
+            },
+          },
+          additionalProperties: false,
+        },
+        salesSignals: {
+          type: "object",
+          properties: {
+            keyReasons: {
+              type: "array",
+              items: { type: "string" },
+              description: "Two or three short reasons this Lead deserves sales attention.",
+            },
+            suggestedNextAction: {
+              type: "string",
+              description: "The immediate sales action Apex should recommend.",
+            },
+          },
+          required: ["keyReasons", "suggestedNextAction"],
+          additionalProperties: false,
+        },
+        confidence: {
+          type: "object",
+          properties: {
+            evidenceConfidence: {
+              type: "string",
+              description: "High, Medium, Low, or Unknown confidence in the evidence.",
+            },
+            notes: {
+              type: "string",
+              description: "Caveats, contradictions, or missing non-critical fields.",
+            },
+          },
+          required: ["evidenceConfidence", "notes"],
+          additionalProperties: false,
+        },
+        outreachSeed: {
+          type: "object",
+          properties: {
+            personalizationAngles: {
+              type: "array",
+              items: { type: "string" },
+              description: "One or two evidence-backed outreach angles.",
+            },
+            warnings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Warnings that should constrain later personalization.",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["company", "salesSignals", "confidence"],
+      additionalProperties: false,
+    },
+  },
+};
+
 /** @deprecated Use ENRICHMENT_TASK_SPEC instead. */
 export const CORE2X_ENRICHMENT_TASK_SPEC: ParallelTaskSpec = ENRICHMENT_TASK_SPEC;
 
@@ -252,13 +360,18 @@ export const createCore2xEnrichmentWorker = createEnrichmentWorker;
 export function createEnrichmentWorker(options: {
   taskClient: ParallelTaskClient;
   processor?: ParallelProcessor;
+  quickProcessor?: ParallelProcessor;
+  deepProcessor?: ParallelProcessor;
   resultTimeoutSeconds?: number;
 }): (enrichmentRun: EnrichmentRun) => Promise<EnrichmentRunCompletion> {
-  const processor = options.processor ?? "core2x-fast";
+  const quickProcessor = options.quickProcessor ?? "core-fast";
+  const deepProcessor = options.deepProcessor ?? options.processor ?? "core2x-fast";
   const resultTimeoutSeconds =
     options.resultTimeoutSeconds ?? DEFAULT_RESULT_TOTAL_TIMEOUT_SECONDS;
 
   return async (enrichmentRun) => {
+    const processor =
+      enrichmentRun.enrichmentDepth === "quick" ? quickProcessor : deepProcessor;
     const taskRun = await createParallelEnrichmentTaskRun({
       taskClient: options.taskClient,
       enrichmentRun,
@@ -286,10 +399,14 @@ async function createParallelEnrichmentTaskRun(options: {
       companyWebsite: `https://${enrichmentRun.normalizedCompanyDomain}`,
     },
     processor,
-    taskSpec: ENRICHMENT_TASK_SPEC,
+    taskSpec:
+      enrichmentRun.enrichmentDepth === "quick"
+        ? QUICK_ENRICHMENT_TASK_SPEC
+        : ENRICHMENT_TASK_SPEC,
     metadata: {
       apex_run: enrichmentRun.id,
       domain: enrichmentRun.normalizedCompanyDomain,
+      enrichment_depth: enrichmentRun.enrichmentDepth,
     },
   });
 }

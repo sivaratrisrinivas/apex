@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   ENRICHMENT_TASK_SPEC,
+  QUICK_ENRICHMENT_TASK_SPEC,
   createEnrichmentWorker,
   createParallelTaskClientFromEnv,
   type FetchImplementation,
@@ -339,6 +340,134 @@ describe("Parallel Enrichment", () => {
     );
   });
 
+  test("uses a lighter Parallel task for quick Enrichment Runs", async () => {
+    const requests: Parameters<ParallelTaskClient["createTaskRun"]>[0][] = [];
+    const taskClient: ParallelTaskClient = {
+      createTaskRun: async (request) => {
+        requests.push(request);
+
+        return {
+          runId: "trun_modal_quick",
+        };
+      },
+      retrieveTaskRunResult: async () => ({
+        output: {
+          type: "json",
+          content: {
+            company: {
+              name: "Modal Labs",
+              domain: "modal.com",
+            },
+            salesSignals: {
+              keyReasons: ["AI infrastructure workload"],
+              suggestedNextAction: "Review infrastructure workload signal.",
+            },
+            confidence: {
+              evidenceConfidence: "Medium",
+              notes: "Quick pass.",
+            },
+          },
+          basis: [],
+        },
+      }),
+    };
+    const worker = createEnrichmentWorker({ taskClient });
+
+    const completion = await worker({
+      ...enrichmentRunFor("modal.com"),
+      enrichmentDepth: "quick",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      processor: "core-fast",
+      taskSpec: QUICK_ENRICHMENT_TASK_SPEC,
+      metadata: {
+        enrichment_depth: "quick",
+      },
+    });
+    expect(completion).toMatchObject({
+      status: "partial",
+      companyEnrichment: {
+        content: {
+          company: {
+            name: "Modal Labs",
+            domain: "modal.com",
+          },
+        },
+      },
+    });
+  });
+
+  test("stages quick enrichment before deep enrichment when configured", async () => {
+    const requests: Parameters<ParallelTaskClient["createTaskRun"]>[0][] = [];
+    const taskClient: ParallelTaskClient = {
+      createTaskRun: async (request) => {
+        requests.push(request);
+
+        return {
+          runId: `trun_${request.metadata.enrichment_depth}`,
+        };
+      },
+      retrieveTaskRunResult: async () => ({
+        output: {
+          type: "json",
+          content: {
+            company: {
+              name: "Modal Labs",
+              domain: "modal.com",
+              headquarters: "New York, NY",
+              employeeRange: "51-200 employees",
+            },
+            funding: {
+              stage: "Series B",
+              totalRaised: "$23M",
+              latestRound: "Series B",
+              latestRoundDate: "2025-04-15",
+            },
+            technicalSignals: {
+              aiWorkloads: "Runs cloud infrastructure for AI workloads.",
+              computeIntensity: "high",
+              developerToolRelevance: "Strong developer platform signal.",
+            },
+            salesSignals: {
+              keyReasons: ["AI infrastructure workload"],
+              suggestedNextAction: "Review infrastructure workload signal.",
+            },
+            confidence: {
+              evidenceConfidence: "High",
+              notes: "Technical signal is supported by citations.",
+            },
+            outreachSeed: {
+              personalizationAngles: ["AI infrastructure scaling"],
+              warnings: [],
+            },
+          },
+          basis: [],
+        },
+      }),
+    };
+    const app = createApp({
+      parallelTaskClient: taskClient,
+      stagedEnrichment: true,
+    });
+
+    await postDemoSignup(app, {
+      email: "engineer@modal.com",
+      signedUpAt: "2026-05-01T10:00:00.000Z",
+    });
+    await waitForBackgroundWork();
+
+    expect(requests.map((request) => request.processor)).toEqual([
+      "core-fast",
+      "core2x-fast",
+    ]);
+    expect(requests.map((request) => request.metadata.enrichment_depth)).toEqual([
+      "quick",
+      "deep",
+    ]);
+  });
+
   test("reads Parallel credentials from WSL environment variables", async () => {
     const calls: { url: string; headers: Headers; body?: unknown }[] = [];
     const fetchImplementation: FetchImplementation = async (input, init) => {
@@ -575,8 +704,11 @@ describe("Parallel Enrichment", () => {
     const dashboard = await app.fetch(new Request("http://localhost/"));
     const html = await dashboard.text();
 
-    expect(requests).toHaveLength(1);
-    expect(requests[0].processor).toBe("core2x-fast");
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.processor)).toEqual([
+      "core-fast",
+      "core2x-fast",
+    ]);
     expect(html).toContain("Modal Labs");
     expect(html).toContain("High");
   });
@@ -643,7 +775,11 @@ describe("Parallel Enrichment", () => {
     });
     await waitForBackgroundWork();
 
-    expect(retrieveOptions).toEqual([{ timeoutSeconds: 420 }]);
+    expect(retrieveOptions).toHaveLength(2);
+    expect(retrieveOptions).toEqual([
+      expect.objectContaining({ timeoutSeconds: 420 }),
+      expect.objectContaining({ timeoutSeconds: 420 }),
+    ]);
   });
 
   test("shows Parallel API errors as failed Enrichment Status reasons", async () => {
@@ -688,6 +824,7 @@ function enrichmentRunFor(normalizedCompanyDomain: string): EnrichmentRun {
     developerSignupId: "developer_signup_1",
     companyId: "company_1",
     normalizedCompanyDomain,
+    enrichmentDepth: "deep",
     status: "researching",
     requestedAt: "2026-05-01T10:00:00.000Z",
     startedAt: "2026-05-01T10:00:01.000Z",

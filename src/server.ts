@@ -32,6 +32,7 @@ export interface CreateAppOptions {
   parallelTaskClient?: ParallelTaskClient;
   outreachDraftWriter?: OutreachDraftWriter | null;
   env?: Record<string, string | undefined>;
+  stagedEnrichment?: boolean;
   recoverActiveRuns?: boolean;
   deferTask?: (task: () => Promise<void>) => void;
 }
@@ -46,18 +47,21 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
   const configuredEnrichmentWorker = resolveEnrichmentWorker(options);
   const draftWriter = resolveOutreachDraftWriter(options);
   const recoverActiveRuns = options.recoverActiveRuns ?? true;
+  const stagedEnrichment = resolveStagedEnrichment(options);
+  const scheduleEnrichmentRun = (enrichmentRunId: string) => {
+    scheduleDeferredTask(options, async () => {
+      await runEnrichmentRun(store, enrichmentRunId, configuredEnrichmentWorker, {
+        scheduleDeepAfterQuick: stagedEnrichment,
+        scheduleEnrichmentRun,
+      });
+    });
+  };
 
   if (configuredEnrichmentWorker && recoverActiveRuns) {
     const recoverableRuns = store.listRecoverableEnrichmentRuns();
 
     for (const enrichmentRun of recoverableRuns) {
-      scheduleDeferredTask(options, async () => {
-        await runEnrichmentRun(
-          store,
-          enrichmentRun.id,
-          configuredEnrichmentWorker,
-        );
-      });
+      scheduleEnrichmentRun(enrichmentRun.id);
     }
   }
 
@@ -78,6 +82,8 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
             leadQueueSort,
             activeView: parseDashboardView(url.searchParams.get("view")),
             liveRefreshEnabled: configuredEnrichmentWorker !== undefined,
+            latestCompanyEnrichmentId:
+              store.listCompanyEnrichments()[0]?.id ?? null,
           }),
           {
             headers: {
@@ -125,6 +131,8 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
               isActiveEnrichmentStatus(run.status),
             ).length,
             latestRunStatus: latestRun?.status ?? null,
+            latestCompanyEnrichmentId:
+              store.listCompanyEnrichments()[0]?.id ?? null,
             generatedAt: new Date().toISOString(),
           },
           200,
@@ -142,15 +150,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         }
 
         if (result.enrichmentRun) {
-          const enrichmentRunId = result.enrichmentRun.id;
-
-          scheduleDeferredTask(options, async () => {
-            await runEnrichmentRun(
-              store,
-              enrichmentRunId,
-              configuredEnrichmentWorker,
-            );
-          });
+          scheduleEnrichmentRun(result.enrichmentRun.id);
         }
 
         if (isFormPost) {
@@ -210,15 +210,7 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           return jsonResponse(result.body, result.status);
         }
 
-        const enrichmentRunId = result.enrichmentRun.id;
-
-        scheduleDeferredTask(options, async () => {
-          await runEnrichmentRun(
-            store,
-            enrichmentRunId,
-            configuredEnrichmentWorker,
-          );
-        });
+        scheduleEnrichmentRun(result.enrichmentRun.id);
 
         if (isFormPost) {
           return new Response(null, {
@@ -295,6 +287,10 @@ function resolveEnrichmentWorker(
   if (options.parallelTaskClient) {
     return createEnrichmentWorker({
       taskClient: options.parallelTaskClient,
+      quickProcessor: parseParallelProcessor(env.APEX_PARALLEL_QUICK_PROCESSOR),
+      deepProcessor:
+        parseParallelProcessor(env.APEX_PARALLEL_DEEP_PROCESSOR) ??
+        parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
       resultTimeoutSeconds:
         parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
         600,
@@ -311,11 +307,32 @@ function resolveEnrichmentWorker(
 
   return createEnrichmentWorker({
     taskClient: createParallelTaskClientFromEnv({ env }),
-    processor: parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
+    quickProcessor: parseParallelProcessor(env.APEX_PARALLEL_QUICK_PROCESSOR),
+    deepProcessor:
+      parseParallelProcessor(env.APEX_PARALLEL_DEEP_PROCESSOR) ??
+      parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
     resultTimeoutSeconds:
       parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
       600,
   });
+}
+
+function resolveStagedEnrichment(options: CreateAppOptions): boolean {
+  if (options.stagedEnrichment !== undefined) {
+    return options.stagedEnrichment;
+  }
+
+  const env = options.env ?? process.env;
+
+  if (options.enrichmentWorker) {
+    return false;
+  }
+
+  if (env.APEX_ENRICHMENT_MODE?.trim().toLowerCase() === "fake") {
+    return false;
+  }
+
+  return Boolean(options.parallelTaskClient || env.PARALLEL_API_KEY?.trim());
 }
 
 const PARALLEL_PROCESSORS: ParallelProcessor[] = [
@@ -377,6 +394,10 @@ async function runEnrichmentRun(
   store: PrototypeStore,
   enrichmentRunId: string,
   enrichmentWorker: EnrichmentWorker | undefined,
+  options: {
+    scheduleDeepAfterQuick: boolean;
+    scheduleEnrichmentRun: (enrichmentRunId: string) => void;
+  },
 ): Promise<void> {
   const startedRun = store.markEnrichmentRunResearching(
     enrichmentRunId,
@@ -393,7 +414,24 @@ async function runEnrichmentRun(
 
   try {
     const completion = await enrichmentWorker(startedRun);
-    store.finishEnrichmentRun(enrichmentRunId, completion, new Date().toISOString());
+    const finishedRun = store.finishEnrichmentRun(
+      enrichmentRunId,
+      completion,
+      new Date().toISOString(),
+    );
+
+    if (
+      options.scheduleDeepAfterQuick &&
+      finishedRun?.enrichmentDepth === "quick" &&
+      completion.status !== "failed" &&
+      completion.companyEnrichment
+    ) {
+      const deepRun = store.requestDeepEnrichmentRun(finishedRun.companyId);
+
+      if (deepRun) {
+        options.scheduleEnrichmentRun(deepRun.id);
+      }
+    }
   } catch (error) {
     const reason = formatErrorMessage(error);
     store.finishEnrichmentRun(
