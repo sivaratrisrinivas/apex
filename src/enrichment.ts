@@ -273,7 +273,7 @@ export function createEnrichmentWorker(options: {
   };
 }
 
-export async function createParallelEnrichmentTaskRun(options: {
+async function createParallelEnrichmentTaskRun(options: {
   taskClient: ParallelTaskClient;
   enrichmentRun: EnrichmentRun;
   processor?: ParallelProcessor;
@@ -297,7 +297,7 @@ export async function createParallelEnrichmentTaskRun(options: {
   });
 }
 
-export async function retrieveParallelEnrichmentTaskCompletion(options: {
+async function retrieveParallelEnrichmentTaskCompletion(options: {
   taskClient: ParallelTaskClient;
   taskRunId: string;
   timeoutSeconds?: number;
@@ -313,24 +313,6 @@ export async function retrieveParallelEnrichmentTaskCompletion(options: {
   return parseParallelEnrichmentTaskResult(result);
 }
 
-export async function tryRetrieveParallelEnrichmentTaskCompletion(options: {
-  taskClient: ParallelTaskClient;
-  taskRunId: string;
-  timeoutSeconds?: number;
-  requestTimeoutSeconds?: number;
-  retryDelayMilliseconds?: number;
-}): Promise<EnrichmentRunCompletion | null> {
-  try {
-    return await retrieveParallelEnrichmentTaskCompletion(options);
-  } catch (error) {
-    if (isParallelResultNotReadyError(error)) {
-      return null;
-    }
-
-    throw error;
-  }
-}
-
 function parseParallelEnrichmentTaskResult(
   result: ParallelTaskRunResult,
 ): EnrichmentRunCompletion {
@@ -344,12 +326,6 @@ function parseParallelEnrichmentTaskResult(
         evidenceBasis: parseEvidenceBasis(result.output.basis),
       },
     };
-}
-
-export function isParallelResultNotReadyError(
-  error: unknown,
-): error is ParallelResultNotReadyError {
-  return error instanceof ParallelResultNotReadyError;
 }
 
 export function createFakeParallelEnrichmentWorker(): (
@@ -705,7 +681,7 @@ class HttpParallelTaskClient implements ParallelTaskClient {
   }
 }
 
-export class ParallelResultNotReadyError extends Error {
+class ParallelResultNotReadyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ParallelResultNotReadyError";

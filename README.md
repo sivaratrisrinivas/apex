@@ -14,7 +14,7 @@ The dashboard is built for a simple sales flow:
 - refresh company research when needed
 - write or rewrite a sales email for Parallel
 
-It can run on your machine with local demo data, or on Vercel with a small private demo state file.
+It can run on your machine with local demo data, or on Render as a free web service for demos.
 
 ## Why
 
@@ -103,13 +103,14 @@ bun run dev
 
 Local data is stored in `.apex/prototype.sqlite`. The `.apex/` folder is ignored by git, so demo data and local experiments stay on your machine.
 
-To deploy the demo on Vercel:
+To deploy the demo on Render:
 
-1. Create a Vercel project from this repo.
-2. Create a private Vercel Blob store from the project Storage tab.
-3. Keep the `BLOB_READ_WRITE_TOKEN` that Vercel adds to the project.
-4. Add `PARALLEL_API_KEY` for live company research.
-5. Add `GEMINI_API_KEY` if you want Gemini-written sales drafts.
-6. Deploy.
+1. Create a Render Web Service from this repo.
+2. Choose the free instance type.
+3. Set the build command to `bun install`.
+4. Set the start command to `bun start`.
+5. Add `PARALLEL_API_KEY` for live company research.
+6. Add `GEMINI_API_KEY` if you want Gemini-written sales drafts.
+7. Deploy.
 
-On Vercel, Apex stores demo state in one private Blob file instead of the local SQLite file. This is enough for a demo, but it is not meant for many people editing leads at the same time.
+On Render Free, Apex uses local SQLite demo storage. That storage is temporary: it can reset when the service restarts, spins down, or redeploys. That is enough for this prototype, but it is not meant for production data.

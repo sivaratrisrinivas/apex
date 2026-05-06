@@ -120,47 +120,6 @@ describe("Enrichment Run lifecycle", () => {
     expect(html).not.toContain("window.location.reload");
   });
 
-  test("can advance deferred Enrichment Runs from dashboard status polling", async () => {
-    let workerCalls = 0;
-    const app = createApp({
-      pollActiveRunsOnDashboardState: true,
-      enrichmentWorker: async () => {
-        workerCalls += 1;
-
-        if (workerCalls === 1) {
-          return {
-            status: "deferred",
-            reason: "Parallel task is still running.",
-          };
-        }
-
-        return {
-          status: "completed",
-        };
-      },
-    });
-
-    await postDemoSignup(app, {
-      email: "engineer@modal.com",
-      signedUpAt: "2026-05-01T10:00:00.000Z",
-    });
-    await waitForBackgroundWork();
-
-    const statusResponse = await app.fetch(
-      new Request("http://localhost/dashboard-state"),
-    );
-    const statusBody = (await statusResponse.json()) as {
-      activeEnrichmentRunCount: number;
-      latestRunStatus: string;
-    };
-
-    expect(workerCalls).toBe(2);
-    expect(statusBody).toMatchObject({
-      activeEnrichmentRunCount: 0,
-      latestRunStatus: "completed",
-    });
-  });
-
   test("shows completed, partial, and failed Enrichment Status outcomes", async () => {
     const app = createApp({
       enrichmentWorker: async (enrichmentRun) => {

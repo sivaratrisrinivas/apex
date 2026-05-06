@@ -509,7 +509,7 @@ describe("Parallel Enrichment", () => {
     expect(html).toContain("High");
   });
 
-  test("uses a Vercel-safe Parallel result timeout for deployed enrichment", async () => {
+  test("uses a configurable Parallel result timeout for deployed enrichment", async () => {
     const retrieveOptions: unknown[] = [];
     const taskClient: ParallelTaskClient = {
       createTaskRun: async () => ({
@@ -559,8 +559,8 @@ describe("Parallel Enrichment", () => {
     };
     const app = createApp({
       env: {
-        VERCEL: "1",
         PARALLEL_API_KEY: "parallel_secret",
+        APEX_PARALLEL_RESULT_TIMEOUT_SECONDS: "420",
       },
       parallelTaskClient: taskClient,
     });
@@ -571,7 +571,7 @@ describe("Parallel Enrichment", () => {
     });
     await waitForBackgroundWork();
 
-    expect(retrieveOptions).toEqual([{ timeoutSeconds: 270 }]);
+    expect(retrieveOptions).toEqual([{ timeoutSeconds: 420 }]);
   });
 
   test("shows Parallel API errors as failed Enrichment Status reasons", async () => {

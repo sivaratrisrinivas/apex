@@ -34,8 +34,6 @@ export interface CreateAppOptions {
   env?: Record<string, string | undefined>;
   recoverActiveRuns?: boolean;
   deferTask?: (task: () => Promise<void>) => void;
-  onStoreChanged?: () => void | Promise<void>;
-  pollActiveRunsOnDashboardState?: boolean;
 }
 
 export function createApp(options: CreateAppOptions = {}): ApexApp {
@@ -64,7 +62,6 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           enrichmentRun.id,
           configuredEnrichmentWorker,
         );
-        await notifyStoreChanged(options);
       });
     }
   }
@@ -124,19 +121,6 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
       }
 
       if (url.pathname === "/dashboard-state" && request.method === "GET") {
-        if (options.pollActiveRunsOnDashboardState && configuredEnrichmentWorker) {
-          const activeRun = store.listRecoverableEnrichmentRuns()[0];
-
-          if (activeRun) {
-            await runEnrichmentRun(
-              store,
-              activeRun.id,
-              configuredEnrichmentWorker,
-            );
-            await notifyStoreChanged(options);
-          }
-        }
-
         const enrichmentRuns = store.listEnrichmentRuns();
         const latestRun = enrichmentRuns[0];
 
@@ -174,18 +158,15 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
           const enrichmentRunId = result.enrichmentRun.id;
           console.log(`[apex]   ↳ Enrichment run queued: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
-          await notifyStoreChanged(options);
           scheduleDeferredTask(options, async () => {
             await runEnrichmentRun(
               store,
               enrichmentRunId,
               configuredEnrichmentWorker,
             );
-            await notifyStoreChanged(options);
           });
         } else {
           console.log(`[apex]   ↳ No enrichment run needed (fresh enrichment, active run, or unqualified signup)`);
-          await notifyStoreChanged(options);
         }
 
         if (isFormPost) {
@@ -223,9 +204,6 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         console.log(`[apex]   ✓ Outreach draft ${result.reusedExisting ? "reused" : "generated"}: ${draft.companyName} (${draft.status})`);
         console.log(`[apex]   ↳ Subject: ${draft.subject}`);
         console.log(`[apex]   ↳ Evidence refs: ${draft.evidenceReferences.length}`);
-        if (!result.reusedExisting) {
-          await notifyStoreChanged(options);
-        }
 
         if (isFormPost) {
           return new Response(null, {
@@ -260,14 +238,12 @@ export function createApp(options: CreateAppOptions = {}): ApexApp {
         const enrichmentRunId = result.enrichmentRun.id;
         console.log(`[apex]   ✓ Manual refresh: ${enrichmentRunId} for ${result.enrichmentRun.normalizedCompanyDomain}`);
 
-        await notifyStoreChanged(options);
         scheduleDeferredTask(options, async () => {
           await runEnrichmentRun(
             store,
             enrichmentRunId,
             configuredEnrichmentWorker,
           );
-          await notifyStoreChanged(options);
         });
 
         if (isFormPost) {
@@ -303,10 +279,6 @@ function scheduleDeferredTask(
   });
 
   deferTask(task);
-}
-
-async function notifyStoreChanged(options: CreateAppOptions): Promise<void> {
-  await options.onStoreChanged?.();
 }
 
 function parseLeadQueueSort(value: string | null): LeadQueueSort {
@@ -351,7 +323,7 @@ function resolveEnrichmentWorker(
       taskClient: options.parallelTaskClient,
       resultTimeoutSeconds:
         parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
-        defaultParallelResultTimeoutSeconds(env),
+        600,
     });
   }
 
@@ -371,14 +343,8 @@ function resolveEnrichmentWorker(
     processor: parseParallelProcessor(env.APEX_PARALLEL_PROCESSOR),
     resultTimeoutSeconds:
       parsePositiveInteger(env.APEX_PARALLEL_RESULT_TIMEOUT_SECONDS) ??
-      defaultParallelResultTimeoutSeconds(env),
+      600,
   });
-}
-
-function defaultParallelResultTimeoutSeconds(
-  env: Record<string, string | undefined>,
-): number {
-  return env.VERCEL ? 270 : 600;
 }
 
 const PARALLEL_PROCESSORS: ParallelProcessor[] = [
@@ -471,10 +437,6 @@ async function runEnrichmentRun(
     console.log(`[apex]   → Calling enrichment worker...`);
     const completion = await enrichmentWorker(startedRun);
     const elapsed = Date.now() - startTime;
-    if (completion.status === "deferred") {
-      console.log(`[apex]   ↳ Enrichment deferred after ${elapsed}ms: ${completion.reason}`);
-      return;
-    }
 
     console.log(`[apex]   ✓ Enrichment completed in ${elapsed}ms · status: ${completion.status}`);
     if (completion.status !== "failed" && completion.companyEnrichment) {
@@ -559,6 +521,7 @@ if (import.meta.main) {
 
   Bun.serve({
     port,
+    hostname: "0.0.0.0",
     fetch: app.fetch,
   });
 
