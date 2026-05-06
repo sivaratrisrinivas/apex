@@ -40,7 +40,7 @@ function rewriteVercelRequest(request: Request): Request {
   const url = new URL(request.url);
   const apexPath = url.searchParams.get("apexPath");
 
-  if (!url.pathname.startsWith("/api/index") || apexPath === null) {
+  if (apexPath === null) {
     return request;
   }
 

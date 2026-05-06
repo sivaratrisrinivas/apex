@@ -5,15 +5,19 @@
   "buildCommand": "bun run typecheck",
   "outputDirectory": "public",
   "functions": {
-    "api/index.ts": {
+    "api/apex.ts": {
       "maxDuration": 300,
       "includeFiles": "assets/**"
     }
   },
   "rewrites": [
     {
-      "source": "/:apexPath*",
-      "destination": "/api/index?apexPath=:apexPath*"
+      "source": "/",
+      "destination": "/api/apex?apexPath="
+    },
+    {
+      "source": "/:apexPath((?!api/).*)",
+      "destination": "/api/apex?apexPath=:apexPath"
     }
   ]
 }
